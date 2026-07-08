@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/annapo99/agent-switch/internal/model"
 )
@@ -26,6 +27,15 @@ func writeJSON(t *testing.T, home, rel string, payload any) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func useSeoulTime(t *testing.T) {
+	t.Helper()
+	previous := time.Local
+	time.Local = time.FixedZone("KST", 9*60*60)
+	t.Cleanup(func() {
+		time.Local = previous
+	})
 }
 
 func TestCswapPayloadMapsUsageWindowsByEmail(t *testing.T) {
@@ -79,6 +89,8 @@ func TestTokenStatusTextMapsOAuthRowByEmail(t *testing.T) {
 }
 
 func TestCodexPayloadMapsUsagePlanAndOAuth(t *testing.T) {
+	useSeoulTime(t)
+
 	metadata := MetadataByEmailFromCodexPayload(map[string]any{
 		"email":     "annapo.codex@example.com",
 		"plan_type": "pro",
@@ -114,6 +126,8 @@ func TestCodexPayloadMapsUsagePlanAndOAuth(t *testing.T) {
 }
 
 func TestOAuthStatusFromCodexAuthUsesAccessExpiryAndRefreshPresence(t *testing.T) {
+	useSeoulTime(t)
+
 	status := OAuthStatusFromCodexAuth(map[string]any{
 		"tokens": map[string]any{
 			"access_token":  unsignedJWT(map[string]any{"exp": float64(1783504032)}),
@@ -127,6 +141,8 @@ func TestOAuthStatusFromCodexAuthUsesAccessExpiryAndRefreshPresence(t *testing.T
 }
 
 func TestCodexUsageProviderAddsOAuthStatusFromAuth(t *testing.T) {
+	useSeoulTime(t)
+
 	home := t.TempDir()
 	writeJSON(t, home, ".codex/auth.json", map[string]any{
 		"tokens": map[string]any{
