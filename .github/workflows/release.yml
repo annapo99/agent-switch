@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release archives
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          version="${GITHUB_REF_NAME}"
+          for goos in darwin linux; do
+            for goarch in amd64 arm64; do
+              archive="ags_${goos}_${goarch}"
+              mkdir -p "dist/${archive}"
+              CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
+                -trimpath \
+                -ldflags "-s -w -X main.version=${version}" \
+                -o "dist/${archive}/ags" \
+                ./cmd/ags
+              tar -C "dist/${archive}" -czf "dist/${archive}.tar.gz" ags
+              rm -rf "dist/${archive}"
+            done
+          done
+          cp scripts/install.sh dist/install.sh
+          (cd dist && shasum -a 256 *.tar.gz install.sh > checksums.txt)
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

@@ -1,11 +1,34 @@
 # agent-switch
 
+## Interactive Menu
+
+Running `ags` without arguments opens a terminal UI.
+
+```text
+   ___                    __     _____          _ __       __
+  / _ | ___ ____ ___  ___/ /_   / ___/    __ __(_) /______/ /
+ / __ |/ _ `/ -_) _ \/ _  / /   \__ \ |/|/ / // __/ __/ _  /
+/_/ |_|\_, /\__/_//_/\_,_/_/   /____/__,__/_/\__/\__/\_,_/
+      /___/
+
+Switch AI coding agent accounts
+https://github.com/annapo99/agent-switch
+
+➤ 1. Current    Show active accounts
+  2. List       Browse saved accounts
+  3. Save       Save detected accounts
+  4. Use        Switch account
+  5. Remove     Delete saved profile
+
+↑↓ Select  |  →/Enter Open  |  ←/B Back  |  Q Quit
+```
+
+The direct commands remain available for fast shell usage.
+
 `agent-switch` is a local CLI for saving and switching authentication profiles
 used by AI coding agents.
 
 The command is `ags`.
-
-<img src="./assets/terminal-preview.svg" alt="agent-switch terminal preview" width="900">
 
 ```bash
 ags
@@ -41,16 +64,38 @@ restores the selected profile when you want to switch.
 
 ## Install
 
-With Go installed:
+Recommended install path for macOS and Linux:
 
 ```bash
-go install github.com/annapo99/agent-switch/cmd/ags@latest
+VERSION=v0.1.0
+BASE="https://github.com/annapo99/agent-switch/releases/download/${VERSION}"
+curl -fsSLO "${BASE}/install.sh"
+curl -fsSLO "${BASE}/checksums.txt"
+grep ' install.sh$' checksums.txt | shasum -a 256 -c -
+AGS_VERSION="${VERSION}" sh install.sh
 ```
 
 Then run:
 
 ```bash
 ags --help
+```
+
+The installer downloads a GitHub Release binary into `~/.local/bin` and verifies
+the binary against `checksums.txt` before installing it. This avoids piping
+remote code directly into the shell; review `install.sh` before running it if
+you want to inspect the installer first.
+
+To install somewhere else:
+
+```bash
+AGS_INSTALL_DIR=/usr/local/bin AGS_VERSION=v0.1.0 sh install.sh
+```
+
+With Go installed, you can also install from source:
+
+```bash
+go install github.com/annapo99/agent-switch/cmd/ags@latest
 ```
 
 For local development:
@@ -61,7 +106,12 @@ cd agent-switch
 go run ./cmd/ags --help
 ```
 
-Homebrew and release binaries are planned.
+Release binaries are published when a version tag is pushed:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## Quick Start
 
@@ -106,31 +156,6 @@ Show help:
 ```bash
 ags --help
 ```
-
-## Interactive Menu
-
-Running `ags` without arguments opens a terminal UI.
-
-```text
-   ___                    __     _____          _ __       __
-  / _ | ___ ____ ___  ___/ /_   / ___/    __ __(_) /______/ /
- / __ |/ _ `/ -_) _ \/ _  / /   \__ \ |/|/ / // __/ __/ _  /
-/_/ |_|\_, /\__/_//_/\_,_/_/   /____/__,__/_/\__/\__/\_,_/
-      /___/
-
-Switch AI coding agent accounts
-https://github.com/annapo99/agent-switch
-
-➤ 1. Current    Show active accounts
-  2. List       Browse saved accounts
-  3. Save       Save detected accounts
-  4. Use        Switch account
-  5. Remove     Delete saved profile
-
-↑↓ Select  |  →/Enter Open  |  ←/B Back  |  Q Quit
-```
-
-The direct commands remain available for fast shell usage.
 
 ## Commands
 
