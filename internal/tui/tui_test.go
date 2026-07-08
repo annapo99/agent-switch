@@ -206,14 +206,97 @@ func TestCurrentMenuItemRunsCurrentCommand(t *testing.T) {
 	}
 }
 
-func TestUseProfileRunsAgentScopedUseCommand(t *testing.T) {
+func TestSaveMenuItemShowsDetailedDetectedAccountsBeforeSaving(t *testing.T) {
 	var calls [][]string
 	model := newModel(func(args []string) commandResult {
 		calls = append(calls, append([]string{}, args...))
-		if strings.Join(args, " ") == "list --json" {
-			return commandResult{code: 0, output: `[{"agent":"claude","display_name":"Claude","number":2,"label":"annapo@example.com"}]`}
+		switch strings.Join(args, " ") {
+		case "save --json":
+			return commandResult{code: 0, output: `[{
+				"agent":"claude",
+				"display_name":"Claude",
+				"save_number":2,
+				"label":"annapo@example.com",
+				"metadata":{
+					"organization_name":"Example Team",
+					"usage_limits":[{"label":"5h","used_percentage":48,"reset_at":"18:40","remaining":"in 2h 15m"}],
+					"oauth_status":"oauth: fresh",
+					"user_rate_limit_tier":"default_claude_max_5x"
+				}
+			}]`}
+		case "save --agent claude --yes":
+			return commandResult{code: 0, output: "Saved claude account #2\n"}
+		default:
+			t.Fatalf("unexpected args = %q", strings.Join(args, " "))
+			return commandResult{}
 		}
-		return commandResult{code: 0, output: "Switched claude to account #2\n"}
+	})
+	model.cursor = menuIndexSave
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	loading := next.(uiModel)
+	next, _ = loading.Update(runPrimaryCmd(t, cmd))
+	choices := next.(uiModel)
+
+	if len(calls) != 1 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if got := strings.Join(calls[0], " "); got != "save --json" {
+		t.Fatalf("save preview args = %q", got)
+	}
+	view := choices.View()
+	if !strings.Contains(view, "Choose account to save") ||
+		!strings.Contains(view, "Claude") ||
+		!strings.Contains(view, "annapo@example.com [Example Team]") ||
+		!strings.Contains(view, "█████░░░░░") ||
+		!strings.Contains(view, "oauth: fresh") ||
+		!strings.Contains(view, "plan: claude max 5x") ||
+		!strings.Contains(view, "save as #2") {
+		t.Fatalf("view:\n%s", view)
+	}
+
+	next, cmd = choices.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	saving := next.(uiModel)
+	next, _ = saving.Update(runPrimaryCmd(t, cmd))
+	updated := next.(uiModel)
+
+	if len(calls) != 2 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if got := strings.Join(calls[1], " "); got != "save --agent claude --yes" {
+		t.Fatalf("save args = %q", got)
+	}
+	if !strings.Contains(updated.View(), "Saved claude account #2") ||
+		strings.Contains(updated.View(), "Current accounts") {
+		t.Fatalf("view:\n%s", updated.View())
+	}
+}
+
+func TestUseProfileSelectionShowsDetailedSavedAccounts(t *testing.T) {
+	var calls [][]string
+	model := newModel(func(args []string) commandResult {
+		calls = append(calls, append([]string{}, args...))
+		switch strings.Join(args, " ") {
+		case "list --json":
+			return commandResult{code: 0, output: `[{
+				"agent":"claude",
+				"display_name":"Claude",
+				"number":2,
+				"label":"annapo@example.com",
+				"active":true,
+				"metadata":{
+					"organization_name":"Example Team",
+					"usage_limits":[{"label":"5h","used_percentage":48,"reset_at":"18:40","remaining":"in 2h 15m"}],
+					"oauth_status":"oauth: fresh",
+					"user_rate_limit_tier":"default_claude_max_5x"
+				}
+			}]`}
+		case "use 2 --agent claude --yes":
+			return commandResult{code: 0, output: "Switched claude to account #2\n"}
+		default:
+			t.Fatalf("unexpected args = %q", strings.Join(args, " "))
+			return commandResult{}
+		}
 	})
 	model.cursor = menuIndexUse
 
@@ -221,6 +304,17 @@ func TestUseProfileRunsAgentScopedUseCommand(t *testing.T) {
 	loadingProfiles := next.(uiModel)
 	next, _ = loadingProfiles.Update(runPrimaryCmd(t, cmd))
 	profiles := next.(uiModel)
+
+	view := profiles.View()
+	if !strings.Contains(view, "Choose account to use") ||
+		!strings.Contains(view, "Claude") ||
+		!strings.Contains(view, "2: annapo@example.com [Example Team] (active)") ||
+		!strings.Contains(view, "█████░░░░░") ||
+		!strings.Contains(view, "oauth: fresh") ||
+		!strings.Contains(view, "plan: claude max 5x") {
+		t.Fatalf("view:\n%s", view)
+	}
+
 	next, cmd = profiles.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	loadingUse := next.(uiModel)
 	next, _ = loadingUse.Update(runPrimaryCmd(t, cmd))
@@ -232,7 +326,8 @@ func TestUseProfileRunsAgentScopedUseCommand(t *testing.T) {
 	if got := strings.Join(calls[1], " "); got != "use 2 --agent claude --yes" {
 		t.Fatalf("use args = %q", got)
 	}
-	if !strings.Contains(updated.View(), "Switched claude to account #2") {
+	if !strings.Contains(updated.View(), "Switched claude to account #2") ||
+		strings.Contains(updated.View(), "Current accounts") {
 		t.Fatalf("view:\n%s", updated.View())
 	}
 }
@@ -292,7 +387,7 @@ func runPrimaryCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
 	for _, batched := range batch {
 		msg := batched()
 		switch msg.(type) {
-		case commandFinishedMsg, profilesFinishedMsg:
+		case commandFinishedMsg, profilesFinishedMsg, saveCandidatesFinishedMsg:
 			return msg
 		}
 	}

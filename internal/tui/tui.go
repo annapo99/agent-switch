@@ -14,6 +14,7 @@ import (
 
 	"github.com/annapo99/agent-switch/internal/app"
 	"github.com/annapo99/agent-switch/internal/model"
+	"github.com/annapo99/agent-switch/internal/render"
 )
 
 const (
@@ -44,7 +45,8 @@ const (
 type profileAction int
 
 const (
-	actionUse profileAction = iota
+	actionSave profileAction = iota
+	actionUse
 	actionRemove
 )
 
@@ -60,6 +62,10 @@ type commandFinishedMsg struct {
 
 type profilesFinishedMsg struct {
 	action profileAction
+	result commandResult
+}
+
+type saveCandidatesFinishedMsg struct {
 	result commandResult
 }
 
@@ -108,17 +114,18 @@ var (
 )
 
 type uiModel struct {
-	runner        commandRunner
-	screen        screen
-	cursor        int
-	profileCursor int
-	profileAction profileAction
-	profiles      []model.Profile
-	pending       model.Profile
-	title         string
-	output        string
-	loadingDetail string
-	spinner       int
+	runner         commandRunner
+	screen         screen
+	cursor         int
+	profileCursor  int
+	profileAction  profileAction
+	profiles       []model.Profile
+	saveCandidates []model.SaveCandidate
+	pending        model.Profile
+	title          string
+	output         string
+	loadingDetail  string
+	spinner        int
 }
 
 func Run(home string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -175,6 +182,8 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.finishCommand(msg.title, msg.result), nil
 	case profilesFinishedMsg:
 		return m.finishProfiles(msg.action, msg.result), nil
+	case saveCandidatesFinishedMsg:
+		return m.finishSaveCandidates(msg.result), nil
 	case spinnerTickMsg:
 		if m.screen != screenLoading {
 			return m, nil
@@ -220,10 +229,10 @@ func (m uiModel) goBack() uiModel {
 func (m *uiModel) moveCursor(delta int) {
 	switch m.screen {
 	case screenProfiles:
-		if len(m.profiles) == 0 {
+		if m.selectionCount() == 0 {
 			return
 		}
-		m.profileCursor = wrap(m.profileCursor+delta, len(m.profiles))
+		m.profileCursor = wrap(m.profileCursor+delta, m.selectionCount())
 	default:
 		m.cursor = wrap(m.cursor+delta, len(menuItems))
 	}
@@ -261,7 +270,7 @@ func (m uiModel) selectCurrent() (tea.Model, tea.Cmd) {
 	case menuIndexList:
 		return m.startCommand("Saved accounts", []string{"list"})
 	case menuIndexSave:
-		return m.startCommand("Save detected accounts", []string{"save", "--yes"})
+		return m.startOpenSaveCandidates()
 	case menuIndexUse:
 		return m.startOpenProfiles(actionUse)
 	case menuIndexRemove:
@@ -319,6 +328,17 @@ func (m uiModel) startOpenProfiles(action profileAction) (uiModel, tea.Cmd) {
 	}, spinnerTick())
 }
 
+func (m uiModel) startOpenSaveCandidates() (uiModel, tea.Cmd) {
+	m.screen = screenLoading
+	m.title = "Choose account to save"
+	m.output = ""
+	m.loadingDetail = "Loading detected accounts"
+	m.spinner = 0
+	return m, tea.Batch(func() tea.Msg {
+		return saveCandidatesFinishedMsg{result: m.runner([]string{"save", "--json"})}
+	}, spinnerTick())
+}
+
 func (m uiModel) finishProfiles(action profileAction, result commandResult) uiModel {
 	if result.code != 0 {
 		m.screen = screenOutput
@@ -342,15 +362,50 @@ func (m uiModel) finishProfiles(action profileAction, result commandResult) uiMo
 	m.screen = screenProfiles
 	m.profileAction = action
 	m.profiles = profiles
+	m.saveCandidates = nil
+	m.profileCursor = 0
+	m.loadingDetail = ""
+	return m
+}
+
+func (m uiModel) finishSaveCandidates(result commandResult) uiModel {
+	if result.code != 0 {
+		m.screen = screenOutput
+		m.title = "Detected accounts"
+		m.output = outputWithCode(result)
+		return m
+	}
+	var candidates []model.SaveCandidate
+	if err := json.Unmarshal([]byte(result.output), &candidates); err != nil {
+		m.screen = screenOutput
+		m.title = "Detected accounts"
+		m.output = "Failed to read detected accounts: " + err.Error()
+		return m
+	}
+	if len(candidates) == 0 {
+		m.screen = screenOutput
+		m.title = "Detected accounts"
+		m.output = "No active agent accounts detected."
+		return m
+	}
+	m.screen = screenProfiles
+	m.profileAction = actionSave
+	m.profiles = nil
+	m.saveCandidates = candidates
 	m.profileCursor = 0
 	m.loadingDetail = ""
 	return m
 }
 
 func (m uiModel) applyProfileAction() (uiModel, tea.Cmd) {
-	if len(m.profiles) == 0 {
+	if m.selectionCount() == 0 {
 		m.screen = screenMenu
 		return m, nil
+	}
+	if m.profileAction == actionSave {
+		candidate := m.saveCandidates[m.profileCursor]
+		args := []string{"save", "--agent", candidate.Agent, "--yes"}
+		return m.startCommand("Save account", args)
 	}
 	profile := m.profiles[m.profileCursor]
 	args := []string{"use", strconv.Itoa(profile.Number), "--agent", profile.Agent, "--yes"}
@@ -454,23 +509,72 @@ func (m uiModel) outputView() string {
 
 func (m uiModel) profilesView() string {
 	title := "Choose account to use"
-	if m.profileAction == actionRemove {
+	if m.profileAction == actionSave {
+		title = "Choose account to save"
+	} else if m.profileAction == actionRemove {
 		title = "Choose account to remove"
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(title))
 	b.WriteString("\n\n")
-	for index, profile := range m.profiles {
-		cursor := " "
-		if index == m.profileCursor {
-			cursor = cursorStyle.Render("➤")
-		}
-		agent := numberStyle.Render(fmt.Sprintf("%-6s", profile.Agent))
-		label := outputStyle.Render(profile.Label)
-		fmt.Fprintf(&b, "%s %s #%d  %s\n", cursor, agent, profile.Number, label)
+	if m.profileAction == actionSave {
+		m.writeSaveCandidateTrees(&b)
+	} else {
+		m.writeProfileTrees(&b)
 	}
 	b.WriteString("\n↑↓ Select  |  →/Enter Open  |  R Refresh  |  ←/B Back  |  Q Quit\n")
 	return b.String()
+}
+
+func (m uiModel) writeProfileTrees(b *strings.Builder) {
+	lastHeading := ""
+	for index, profile := range m.profiles {
+		if profile.DisplayName != lastHeading {
+			if lastHeading != "" {
+				b.WriteString("\n")
+			}
+			b.WriteString(render.AgentHeading(profile.DisplayName, true))
+			b.WriteString("\n")
+			lastHeading = profile.DisplayName
+		}
+		writeSelectableTree(b, index == m.profileCursor, render.ProfileTree(profile, profile.Active, true))
+	}
+}
+
+func (m uiModel) writeSaveCandidateTrees(b *strings.Builder) {
+	lastHeading := ""
+	for index, candidate := range m.saveCandidates {
+		if candidate.DisplayName != lastHeading {
+			if lastHeading != "" {
+				b.WriteString("\n")
+			}
+			b.WriteString(render.AgentHeading(candidate.DisplayName, true))
+			b.WriteString("\n")
+			lastHeading = candidate.DisplayName
+		}
+		writeSelectableTree(b, index == m.profileCursor, render.SaveCandidateTree(candidate, index+1, true))
+	}
+}
+
+func writeSelectableTree(b *strings.Builder, selected bool, lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	cursor := " "
+	if selected {
+		cursor = cursorStyle.Render("➤")
+	}
+	fmt.Fprintf(b, "%s %s\n", cursor, lines[0])
+	for _, line := range lines[1:] {
+		fmt.Fprintf(b, "  %s\n", line)
+	}
+}
+
+func (m uiModel) selectionCount() int {
+	if m.profileAction == actionSave {
+		return len(m.saveCandidates)
+	}
+	return len(m.profiles)
 }
 
 func (m uiModel) confirmRemoveView() string {

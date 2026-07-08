@@ -57,33 +57,15 @@ func ProfileTree(profile model.Profile, active bool, color bool) []string {
 	}
 	lines := []string{colorProfileLine(head, color, active)}
 
-	children := []child{}
-	for _, usage := range usageLimits(profile.Metadata["usage_limits"]) {
-		children = append(children, child{kind: "usage", value: usage})
-	}
-	if status := profile.Metadata.String("oauth_status"); status != "" {
-		children = append(children, child{kind: "status", text: status})
-	}
-	statusLines := statusLines(profile.Metadata["status_lines"])
-	if plan := planStatusLine(profile.Metadata); plan != "" && !hasPlanStatus(statusLines) {
-		statusLines = append(statusLines, plan)
-	}
-	for _, status := range statusLines {
-		children = append(children, child{kind: "status", text: status})
-	}
+	return append(lines, childLines(metadataChildren(profile.Metadata), color)...)
+}
 
-	for index, item := range children {
-		branch := "├"
-		if index == len(children)-1 {
-			branch = "└"
-		}
-		if item.kind == "usage" {
-			lines = append(lines, usageLine(branch, item.value, color))
-		} else {
-			lines = append(lines, statusLine(branch, item.text, color))
-		}
+func SaveCandidateTree(candidate model.SaveCandidate, choiceNumber int, color bool) []string {
+	account := model.ActiveAccount{
+		Label:    candidate.Label,
+		Metadata: candidate.Metadata,
 	}
-	return lines
+	return AccountSaveTree(account, choiceNumber, candidate.SaveNumber, candidate.DuplicateNumber, color)
 }
 
 func AccountSaveTree(account model.ActiveAccount, choiceNumber, saveNumber, duplicateNumber int, color bool) []string {
@@ -95,22 +77,58 @@ func AccountSaveTree(account model.ActiveAccount, choiceNumber, saveNumber, dupl
 	if org := account.Metadata.String("organization_name"); org != "" {
 		head += " [" + org + "]"
 	}
-	detail := "     └ ready"
+	action := "ready"
 	if saveNumber > 0 {
-		detail = fmt.Sprintf("     └ save as #%d", saveNumber)
+		action = fmt.Sprintf("save as #%d", saveNumber)
 	} else if duplicateNumber > 0 {
-		detail = fmt.Sprintf("     └ already saved as #%d", duplicateNumber)
+		action = fmt.Sprintf("already saved as #%d", duplicateNumber)
 	}
-	return []string{
-		colorProfileLine(head, color, false),
-		colorize(detail, dim+yellow, color),
-	}
+	lines := []string{colorProfileLine(head, color, false)}
+	children := append(metadataChildren(account.Metadata), child{kind: "action", text: action})
+	return append(lines, childLines(children, color)...)
 }
 
 type child struct {
 	kind  string
 	value map[string]any
 	text  string
+}
+
+func metadataChildren(metadata model.Metadata) []child {
+	children := []child{}
+	for _, usage := range usageLimits(metadata["usage_limits"]) {
+		children = append(children, child{kind: "usage", value: usage})
+	}
+	if status := metadata.String("oauth_status"); status != "" {
+		children = append(children, child{kind: "status", text: status})
+	}
+	statusLines := statusLines(metadata["status_lines"])
+	if plan := planStatusLine(metadata); plan != "" && !hasPlanStatus(statusLines) {
+		statusLines = append(statusLines, plan)
+	}
+	for _, status := range statusLines {
+		children = append(children, child{kind: "status", text: status})
+	}
+	return children
+}
+
+func childLines(children []child, color bool) []string {
+	var lines []string
+	for index, item := range children {
+		branch := "├"
+		if index == len(children)-1 {
+			branch = "└"
+		}
+		switch item.kind {
+		case "usage":
+			lines = append(lines, usageLine(branch, item.value, color))
+		case "action":
+			lines = append(lines, actionLine(branch, item.text, color))
+		default:
+			lines = append(lines, statusLine(branch, item.text, color))
+		}
+	}
+	return lines
 }
 
 func usageLine(branch string, usage map[string]any, color bool) string {
@@ -149,6 +167,10 @@ func progressBar(pct string) string {
 
 func statusLine(branch, status string, color bool) string {
 	return colorize(fmt.Sprintf("     %s • %s", branch, status), dim+yellow, color)
+}
+
+func actionLine(branch, action string, color bool) string {
+	return colorize(fmt.Sprintf("     %s %s", branch, action), dim+yellow, color)
 }
 
 func colorProfileLine(line string, color bool, active bool) string {

@@ -132,6 +132,30 @@ func TestSaveAlreadySavedAccountDoesNotPrompt(t *testing.T) {
 	}
 }
 
+func TestSaveJSONListsDetectedCandidatesWithoutSaving(t *testing.T) {
+	home := t.TempDir()
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo@example.com", "accessToken": "test-token-1"})
+
+	code, out, errOut := runService(t, home, []string{"save", "--json"}, "")
+
+	if code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q out=%q", code, errOut, out)
+	}
+	var candidates []map[string]any
+	if err := json.Unmarshal([]byte(out), &candidates); err != nil {
+		t.Fatalf("json error: %v\n%s", err, out)
+	}
+	if len(candidates) != 1 ||
+		candidates[0]["agent"] != "claude" ||
+		candidates[0]["label"] != "annapo@example.com" ||
+		candidates[0]["save_number"] != float64(1) {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/1/manifest.json")); !os.IsNotExist(err) {
+		t.Fatalf("save --json should not create a profile: %v", err)
+	}
+}
+
 func TestListCurrentUseAndRemove(t *testing.T) {
 	home := t.TempDir()
 	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "first@example.com", "accessToken": "first-test-token"})
@@ -165,6 +189,31 @@ func TestListCurrentUseAndRemove(t *testing.T) {
 	code, out, errOut = runService(t, home, []string{"remove", "1"}, "y\n")
 	if code != 0 || errOut != "" || !strings.Contains(out, "Removed claude account #1") {
 		t.Fatalf("remove code=%d err=%q out=\n%s", code, errOut, out)
+	}
+}
+
+func TestListJSONMarksActiveProfile(t *testing.T) {
+	home := t.TempDir()
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "first@example.com", "accessToken": "first-test-token"})
+	if code, _, _ := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+		t.Fatalf("save first code = %d", code)
+	}
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "second@example.com", "accessToken": "second-test-token"})
+	if code, _, _ := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+		t.Fatalf("save second code = %d", code)
+	}
+
+	code, out, errOut := runService(t, home, []string{"list", "--json"}, "")
+
+	if code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q out=%q", code, errOut, out)
+	}
+	var profiles []map[string]any
+	if err := json.Unmarshal([]byte(out), &profiles); err != nil {
+		t.Fatalf("json error: %v\n%s", err, out)
+	}
+	if len(profiles) != 2 || profiles[0]["active"] != nil || profiles[1]["active"] != true {
+		t.Fatalf("profiles = %#v", profiles)
 	}
 }
 

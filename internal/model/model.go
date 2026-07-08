@@ -34,6 +34,19 @@ type Profile struct {
 	AuthFiles   []string `json:"auth_files"`
 	CreatedAt   string   `json:"created_at"`
 	Metadata    Metadata `json:"metadata"`
+	Active      bool     `json:"active,omitempty"`
+}
+
+type SaveCandidate struct {
+	Agent           string   `json:"agent"`
+	DisplayName     string   `json:"display_name"`
+	SaveNumber      int      `json:"save_number,omitempty"`
+	DuplicateNumber int      `json:"duplicate_number,omitempty"`
+	Label           string   `json:"label"`
+	Fingerprint     string   `json:"fingerprint"`
+	Source          string   `json:"source"`
+	AuthFiles       []string `json:"auth_files"`
+	Metadata        Metadata `json:"metadata"`
 }
 
 type MetadataKey struct {

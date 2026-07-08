@@ -54,9 +54,13 @@ func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	command := args[0]
 	switch command {
 	case "save":
-		opts, ok := parseOptions(args[1:], false, stdout, stderr)
+		opts, ok := parseOptions(args[1:], true, stdout, stderr)
 		if !ok {
 			return 2
+		}
+		if opts.json {
+			writeJSON(stdout, s.SaveCandidates(opts.agent))
+			return 0
 		}
 		return s.Save(stdout, stdin, opts.agent, opts.yes)
 	case "use":
@@ -240,6 +244,7 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 
 func (s *Service) List(stdout io.Writer, agent string, jsonOutput bool) int {
 	profiles := s.withUsageMetadata(s.store.ListProfiles(agent))
+	s.markActiveProfiles(profiles)
 	if jsonOutput {
 		writeJSON(stdout, profiles)
 		return 0
@@ -248,15 +253,13 @@ func (s *Service) List(stdout io.Writer, agent string, jsonOutput bool) int {
 		fmt.Fprintln(stdout, "No saved accounts.")
 		return 0
 	}
-	active := s.activeFingerprints()
 	color := shouldColor(stdout)
 	fmt.Fprintln(stdout, "Saved accounts")
 	fmt.Fprintln(stdout)
 	for _, group := range groupProfiles(profiles) {
 		fmt.Fprintln(stdout, render.AgentHeading(group.name, color))
 		for _, profile := range group.profiles {
-			isActive := active[profile.Agent] == profile.Fingerprint
-			for _, line := range render.ProfileTree(profile, isActive, color) {
+			for _, line := range render.ProfileTree(profile, profile.Active, color) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
@@ -274,6 +277,7 @@ func (s *Service) CurrentJSONAware(stdout io.Writer, agent string, jsonOutput bo
 	var current []model.Profile
 	for _, item := range detected {
 		if duplicate, ok := s.store.FindDuplicate(item.account); ok {
+			duplicate.Active = true
 			current = append(current, duplicate)
 		}
 	}
@@ -292,7 +296,8 @@ func (s *Service) CurrentJSONAware(stdout io.Writer, agent string, jsonOutput bo
 	for _, group := range groupProfiles(current) {
 		fmt.Fprintln(stdout, render.AgentHeading(group.name, color))
 		for _, profile := range group.profiles {
-			for _, line := range render.ProfileTree(profile, true, color) {
+			profile.Active = true
+			for _, line := range render.ProfileTree(profile, profile.Active, color) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
@@ -329,6 +334,35 @@ func (s *Service) Remove(number int, stdout io.Writer, stdin io.Reader, agent st
 type detectedAccount struct {
 	provider provider.Provider
 	account  model.ActiveAccount
+}
+
+func (s *Service) SaveCandidates(agent string) []model.SaveCandidate {
+	detected := s.detectedAccounts(agent)
+	usageMetadata := map[model.MetadataKey]model.Metadata{}
+	if s.usageProvider != nil {
+		usageMetadata = s.usageProvider.Load(s.home)
+	}
+	var candidates []model.SaveCandidate
+	for _, item := range detected {
+		key := model.MetadataKey{Agent: item.account.Agent, Label: strings.ToLower(item.account.Label)}
+		metadata := mergedMetadata(item.account.Metadata, usageMetadata[key])
+		candidate := model.SaveCandidate{
+			Agent:       item.account.Agent,
+			DisplayName: item.account.DisplayName,
+			Label:       item.account.Label,
+			Fingerprint: item.account.Fingerprint,
+			Source:      item.account.Source,
+			AuthFiles:   append([]string{}, item.account.AuthFiles...),
+			Metadata:    metadata,
+		}
+		if duplicate, ok := s.store.FindDuplicate(item.account); ok {
+			candidate.DuplicateNumber = duplicate.Number
+		} else {
+			candidate.SaveNumber = s.store.NextNumber(item.account.Agent)
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
 }
 
 func (s *Service) detectedAccounts(agent string) []detectedAccount {
@@ -382,6 +416,13 @@ func (s *Service) activeFingerprints() map[string]string {
 		active[item.account.Agent] = item.account.Fingerprint
 	}
 	return active
+}
+
+func (s *Service) markActiveProfiles(profiles []model.Profile) {
+	active := s.activeFingerprints()
+	for index := range profiles {
+		profiles[index].Active = active[profiles[index].Agent] == profiles[index].Fingerprint
+	}
 }
 
 func (s *Service) withUsageMetadata(profiles []model.Profile) []model.Profile {
@@ -563,4 +604,14 @@ func sortedKeys[T any](input map[string]T) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func mergedMetadata(values ...model.Metadata) model.Metadata {
+	merged := model.Metadata{}
+	for _, metadata := range values {
+		for key, value := range metadata {
+			merged[key] = value
+		}
+	}
+	return merged
 }
