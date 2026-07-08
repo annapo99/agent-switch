@@ -6,7 +6,38 @@
  / __ |/ _ `/ -_) _ \/ _  / /   \__ \ |/|/ / // __/ __/ _  /
 /_/ |_|\_, /\__/_//_/\_,_/_/   /____/__,__/_/\__/\__/\_,_/
       /___/
+
+Switch AI coding agent accounts
+https://github.com/annapo99/agent-switch
+
+➤ 1. Current    Show active accounts
+  2. List       Browse saved accounts
+  3. Save       Save detected accounts
+  4. Use        Switch account
+  5. Remove     Delete saved profile
+
+Current accounts
+
+Claude
+  2: annapo.claude@example.com [Example Team] (active)
+     ├ 5h       █████░░░░░  48%   resets 18:40         in 2h 15m
+     ├ 7d       ███░░░░░░░  27%   resets Jul 13 02:59  in 4d 10h
+     ├ Fable    ██░░░░░░░░  15%   resets Jul 13 02:59  in 4d 10h
+     ├ • oauth: fresh, refresh token yes, expires 21:48 in 5h 23m
+     └ • plan: claude max 5x
+
+Codex
+  1: annapo.codex@example.com (active)
+     ├ 5h       █░░░░░░░░░  12%   resets 18:47         in 2h 22m
+     ├ 7d       █░░░░░░░░░  10%   resets Jul 14 12:00  in 5d 19h
+     ├ Spark 5h ░░░░░░░░░░   0%   resets 21:24         in 5h 0m
+     ├ Spark 7d ░░░░░░░░░░   0%   resets Jul 15 16:24  in 7d 0h
+     ├ • oauth: fresh, refresh token yes, expires 20:34 in 4h 10m
+     └ • plan: pro
 ```
+
+`agent-switch` is a local CLI for saving and switching authentication profiles
+used by AI coding agents. It currently supports Claude Code and Codex.
 
 ## Download
 
@@ -21,29 +52,14 @@ The installer downloads a GitHub Release binary into `~/.local/bin` and verifies
 the binary against `checksums.txt` before installing it. The script is saved
 locally first so you can review it before running it.
 
-To install somewhere else:
+To install somewhere else, run `AGS_INSTALL_DIR=/usr/local/bin sh install.sh`.
+With Go installed, `go install github.com/annapo99/agent-switch/cmd/ags@latest`
+also works.
 
-```bash
-AGS_INSTALL_DIR=/usr/local/bin sh install.sh
-```
-
-To verify the installer before running it:
-
-```bash
-curl -fsSLO https://github.com/annapo99/agent-switch/releases/latest/download/checksums.txt
-grep ' install.sh$' checksums.txt | shasum -a 256 -c -
-```
-
-With Go installed, you can also install from source:
-
-```bash
-go install github.com/annapo99/agent-switch/cmd/ags@latest
-```
+To verify the installer before running it, download `checksums.txt` from the
+same release and run `grep ' install.sh$' checksums.txt | shasum -a 256 -c -`.
 
 ## Usage
-
-`agent-switch` is a local CLI for saving and switching authentication profiles
-used by AI coding agents. It currently supports Claude Code and Codex.
 
 Run `ags` to open the terminal UI:
 
@@ -70,36 +86,9 @@ exist. Choose `Use` to switch accounts and `Current` to see the active saved
 profiles.
 
 The same workflows are available as direct shell commands for scripting:
-`save`, `use`, `list`, `current`, and `remove`.
-
-## What It Shows
-
-Saved and current accounts render as compact trees with usage windows, OAuth
-freshness, and plan metadata when available.
-
-```text
-Current accounts
-
-Claude
-  2: annapo.claude@example.com [Example Team] (active)
-     ├ 5h       █████░░░░░  48%   resets 18:40         in 2h 15m
-     ├ 7d       ███░░░░░░░  27%   resets Jul 13 02:59  in 4d 10h
-     ├ Fable    ██░░░░░░░░  15%   resets Jul 13 02:59  in 4d 10h
-     ├ • oauth: fresh, refresh token yes, expires 21:48 in 5h 23m
-     └ • plan: claude max 5x
-
-Codex
-  1: annapo.codex@example.com (active)
-     ├ 5h       █░░░░░░░░░  12%   resets 18:47         in 2h 22m
-     ├ 7d       █░░░░░░░░░  10%   resets Jul 14 12:00  in 5d 19h
-     ├ Spark 5h ░░░░░░░░░░   0%   resets 21:24         in 5h 0m
-     ├ Spark 7d ░░░░░░░░░░   0%   resets Jul 15 16:24  in 7d 0h
-     ├ • oauth: fresh, refresh token yes, expires 20:34 in 4h 10m
-     └ • plan: pro
-```
-
-Usage metadata is best-effort. If a metadata source is unavailable, `ags` still
-lists and switches saved accounts.
+`save`, `use`, `list`, `current`, and `remove`. Usage metadata is best-effort;
+if a metadata source is unavailable, `ags` still lists and switches saved
+accounts.
 
 ## Supported Agents
 
