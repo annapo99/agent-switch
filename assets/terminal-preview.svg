@@ -1,0 +1,44 @@
+<svg width="980" height="650" viewBox="0 0 980 650" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">agent-switch terminal preview</title>
+  <desc id="desc">A terminal-style preview showing ags list output for Claude and Codex accounts.</desc>
+  <defs>
+    <filter id="shadow" x="0" y="0" width="980" height="650" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#010409" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="980" height="650" rx="18" fill="#0D1117"/>
+  <g filter="url(#shadow)">
+    <rect x="38" y="36" width="904" height="578" rx="14" fill="#0B1020"/>
+    <rect x="38" y="36" width="904" height="44" rx="14" fill="#161B22"/>
+    <path d="M38 68H942V92H38V68Z" fill="#161B22"/>
+    <circle cx="64" cy="58" r="6" fill="#FF5F56"/>
+    <circle cx="84" cy="58" r="6" fill="#FFBD2E"/>
+    <circle cx="104" cy="58" r="6" fill="#27C93F"/>
+    <text x="490" y="64" text-anchor="middle" fill="#8B949E" font-family="SFMono-Regular, ui-monospace, Menlo, Consolas, monospace" font-size="13">agent-switch - ags list</text>
+
+    <g font-family="SFMono-Regular, ui-monospace, Menlo, Consolas, monospace" font-size="17" xml:space="preserve">
+      <text x="64" y="116" fill="#8B949E">$</text>
+      <text x="86" y="116" fill="#E6EDF3">ags list</text>
+
+      <text x="64" y="154" fill="#E6EDF3">Saved accounts</text>
+
+      <text x="64" y="198" fill="#58A6FF" font-weight="700">Claude</text>
+      <text x="84" y="226" fill="#3FB950" font-weight="700">2: annapo@example.com [Example Team] (active)</text>
+      <text x="84" y="254" fill="#D29922">├ 5h       ░░░░░░░░░░   2%   resets 18:40         in 4h 40m</text>
+      <text x="84" y="282" fill="#D29922">├ 7d       ██░░░░░░░░  21%   resets Jul 13 03:00  in 4d 13h</text>
+      <text x="84" y="310" fill="#D29922">├ Fable    █░░░░░░░░░   9%   resets Jul 13 03:00  in 4d 13h</text>
+      <text x="84" y="338" fill="#D29922">├ • oauth: fresh, refresh token yes, expires 21:48 in 7h 49m</text>
+      <text x="84" y="366" fill="#D29922">└ • plan: claude max 5x</text>
+
+      <text x="64" y="412" fill="#58A6FF" font-weight="700">Codex</text>
+      <text x="84" y="440" fill="#3FB950" font-weight="700">1: annapo.codex@example.com (active)</text>
+      <text x="84" y="468" fill="#D29922">├ 5h       ░░░░░░░░░░   1%   resets 18:47         in 4h 48m</text>
+      <text x="84" y="496" fill="#D29922">├ 7d       █░░░░░░░░░   8%   resets Jul 14 12:00  in 5d 22h</text>
+      <text x="84" y="524" fill="#D29922">├ Spark 5h ░░░░░░░░░░   0%   resets 18:59         in 5h 0m</text>
+      <text x="84" y="552" fill="#D29922">├ Spark 7d ░░░░░░░░░░   0%   resets Jul 15 13:59  in 7d 0h</text>
+      <text x="84" y="580" fill="#D29922">├ • oauth: fresh, refresh token yes, expires 20:34 in 6h 30m</text>
+      <text x="84" y="608" fill="#D29922">└ • plan: pro</text>
+    </g>
+  </g>
+</svg>
