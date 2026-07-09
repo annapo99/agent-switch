@@ -20,6 +20,7 @@ const (
 	blue   = "\033[34m"
 	cyan   = "\033[36m"
 	yellow = "\033[33m"
+	red    = "\033[31m"
 )
 
 func ShouldColor(stdout any) bool {
@@ -166,7 +167,11 @@ func progressBar(pct string) string {
 }
 
 func statusLine(branch, status string, color bool) string {
-	return colorize(fmt.Sprintf("     %s • %s", branch, status), dim+yellow, color)
+	style := dim + yellow
+	if isDangerStatus(status) {
+		style = bold + red
+	}
+	return colorize(fmt.Sprintf("     %s • %s", branch, status), style, color)
 }
 
 func actionLine(branch, action string, color bool) string {
@@ -188,6 +193,12 @@ func colorize(text, code string, enabled bool) string {
 		return text
 	}
 	return code + text + reset
+}
+
+func isDangerStatus(status string) bool {
+	normalized := strings.ToLower(status)
+	return strings.Contains(normalized, "oauth: expired") ||
+		strings.Contains(normalized, "refresh token invalid")
 }
 
 func usageLimits(value any) []map[string]any {

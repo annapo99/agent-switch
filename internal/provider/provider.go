@@ -19,6 +19,7 @@ import (
 )
 
 const ClaudeKeychainService = "Claude Code-credentials"
+const claudeConfigSnapshotFile = "config.json"
 
 var emailRE = regexp.MustCompile(`[^@\s]+@[^@\s]+\.[^@\s]+`)
 
@@ -240,21 +241,65 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(filepath.Join(profileDir, "keychain.json"), append(data, '\n'), 0o600)
+		if err := os.WriteFile(filepath.Join(profileDir, "keychain.json"), append(data, '\n'), 0o600); err != nil {
+			return err
+		}
+		return writeClaudeConfigSnapshot(home, profileDir)
 	}
-	return p.file.SaveSnapshot(home, account, profileDir)
+	if err := p.file.SaveSnapshot(home, account, profileDir); err != nil {
+		return err
+	}
+	return writeClaudeConfigSnapshot(home, profileDir)
 }
 
 func (p *ClaudeProvider) ApplySnapshot(home string, profileDir string) error {
 	data, err := os.ReadFile(filepath.Join(profileDir, "keychain.json"))
 	if err == nil && p.keychain != nil {
-		var snapshot map[string]string
-		if err := json.Unmarshal(data, &snapshot); err != nil {
+		return withClaudeLocks(home, func() error {
+			return p.applyKeychainSnapshot(home, profileDir, data)
+		})
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return withClaudeLocks(home, func() error {
+		if err := p.file.ApplySnapshot(home, profileDir); err != nil {
 			return err
 		}
-		return p.keychain.WriteItem(snapshot["service"], snapshot["account"], snapshot["secret"])
+		return applyClaudeConfigSnapshot(home, profileDir)
+	})
+}
+
+func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, data []byte) error {
+	var snapshot map[string]string
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return err
 	}
-	return p.file.ApplySnapshot(home, profileDir)
+	service := strings.TrimSpace(snapshot["service"])
+	if service == "" {
+		service = ClaudeKeychainService
+	}
+	secret := snapshot["secret"]
+	if secret == "" {
+		return errors.New("invalid Claude keychain backup")
+	}
+	rollbackItem := p.readKeychainItem(home)
+	configPath := filepath.Join(home, ".claude.json")
+	rollbackConfig, configExisted, err := readOptionalFile(configPath)
+	if err != nil {
+		return err
+	}
+	if err := p.keychain.WriteItem(service, snapshot["account"], secret); err != nil {
+		return err
+	}
+	if err := applyClaudeConfigSnapshot(home, profileDir); err != nil {
+		if rollbackItem != nil {
+			_ = p.keychain.WriteItem(service, rollbackItem.Account, rollbackItem.Secret)
+		}
+		_ = restoreOptionalFile(configPath, rollbackConfig, configExisted)
+		return err
+	}
+	return nil
 }
 
 func (p *ClaudeProvider) MatchesProfile(home string, profile model.Profile) bool {
@@ -362,6 +407,90 @@ func claudeJSONMetadata(home string) model.Metadata {
 		}
 	}
 	return metadata
+}
+
+func writeClaudeConfigSnapshot(home, profileDir string) error {
+	oauth := claudeOAuthAccount(home)
+	if len(oauth) == 0 {
+		return nil
+	}
+	return writeJSONFile(filepath.Join(profileDir, claudeConfigSnapshotFile), map[string]any{
+		"oauthAccount": oauth,
+	})
+}
+
+func applyClaudeConfigSnapshot(home, profileDir string) error {
+	targetConfig, ok, err := readClaudeConfigSnapshot(profileDir)
+	if err != nil || !ok {
+		return err
+	}
+	targetOAuth, ok := targetConfig["oauthAccount"].(map[string]any)
+	if !ok || len(targetOAuth) == 0 {
+		return errors.New("invalid Claude oauthAccount backup")
+	}
+	configPath := filepath.Join(home, ".claude.json")
+	currentConfig := map[string]any{}
+	if existing, ok := readJSON(configPath); ok {
+		root, ok := existing.(map[string]any)
+		if !ok {
+			return errors.New("invalid Claude config")
+		}
+		currentConfig = root
+	} else if fileExists(configPath) {
+		return errors.New("invalid Claude config")
+	}
+	currentConfig["oauthAccount"] = targetOAuth
+	return writeJSONFile(configPath, currentConfig)
+}
+
+func readClaudeConfigSnapshot(profileDir string) (map[string]any, bool, error) {
+	path := filepath.Join(profileDir, claudeConfigSnapshotFile)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+func readOptionalFile(path string) ([]byte, bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	return data, err == nil, err
+}
+
+func restoreOptionalFile(path string, data []byte, existed bool) error {
+	if !existed {
+		err := os.Remove(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func writeJSONFile(path string, payload any) error {
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func claudeOAuthAccount(home string) map[string]any {

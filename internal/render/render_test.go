@@ -78,6 +78,38 @@ func TestAgentHeadingUsesBlueForClaudeAndCodex(t *testing.T) {
 	}
 }
 
+func TestExpiredOAuthStatusUsesRedWhenColored(t *testing.T) {
+	profile := model.Profile{
+		Number: 1,
+		Label:  "annapo.claude@example.com",
+		Metadata: model.Metadata{
+			"oauth_status": "oauth: expired, refresh token invalid, expires Jul 8 14:36 in 0m",
+		},
+	}
+
+	lines := ProfileTree(profile, false, true)
+
+	if !strings.Contains(lines[1], "\033[31m") {
+		t.Fatalf("expired oauth should be red: %q", lines[1])
+	}
+}
+
+func TestFreshOAuthStatusDoesNotUseRedWhenColored(t *testing.T) {
+	profile := model.Profile{
+		Number: 1,
+		Label:  "annapo.claude@example.com",
+		Metadata: model.Metadata{
+			"oauth_status": "oauth: fresh, refresh token yes, expires 19:11 in 7h 59m",
+		},
+	}
+
+	lines := ProfileTree(profile, false, true)
+
+	if strings.Contains(lines[1], "\033[31m") {
+		t.Fatalf("fresh oauth should not be red: %q", lines[1])
+	}
+}
+
 func TestProgressBarRoundsAndClamps(t *testing.T) {
 	tests := map[string]string{
 		"14":  "█░░░░░░░░░",

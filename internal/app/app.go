@@ -281,7 +281,15 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "Switched %s to account #%d\n", profile.Agent, profile.Number)
+	name := profile.DisplayName
+	if name == "" {
+		name = profile.Agent
+	}
+	if profile.Agent == "claude" {
+		fmt.Fprintf(stdout, "Switched %s to account #%d. Running sessions may take up to ~30s to pick it up.\n", name, profile.Number)
+		return 0
+	}
+	fmt.Fprintf(stdout, "Switched %s to account #%d\n", name, profile.Number)
 	return 0
 }
 

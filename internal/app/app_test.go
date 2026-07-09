@@ -236,7 +236,9 @@ func TestListCurrentUseAndRemove(t *testing.T) {
 	}
 
 	code, out, errOut = runService(t, home, []string{"use", "1"}, "")
-	if code != 0 || errOut != "" || !strings.Contains(out, "Switched claude to account #1") || strings.Contains(out, "Switch account?") {
+	if code != 0 || errOut != "" ||
+		!strings.Contains(out, "Switched Claude to account #1. Running sessions may take up to ~30s to pick it up.") ||
+		strings.Contains(out, "Switch account?") {
 		t.Fatalf("use code=%d err=%q out=\n%s", code, errOut, out)
 	}
 	active := readJSONFixture(t, home, ".claude/.credentials.json")
@@ -299,7 +301,7 @@ func TestUseAmbiguousNumberAsksOnceAndAppliesSelectedAgent(t *testing.T) {
 	}
 	if !strings.Contains(out, "Multiple accounts match #1") ||
 		!strings.Contains(out, "2  codex   annapo.codex@example.com") ||
-		!strings.Contains(out, "Switched codex to account #1") ||
+		!strings.Contains(out, "Switched Codex to account #1") ||
 		strings.Count(out, "?") != 1 {
 		t.Fatalf("out:\n%s", out)
 	}

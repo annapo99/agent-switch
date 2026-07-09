@@ -334,7 +334,7 @@ func TestUseProfileSelectionShowsDetailedSavedAccounts(t *testing.T) {
 				}
 			}]`}
 		case "use 2 --agent claude --yes":
-			return commandResult{code: 0, output: "Switched claude to account #2\n"}
+			return commandResult{code: 0, output: "Switched Claude to account #2. Running sessions may take up to ~30s to pick it up.\n"}
 		default:
 			t.Fatalf("unexpected args = %q", strings.Join(args, " "))
 			return commandResult{}
@@ -368,7 +368,7 @@ func TestUseProfileSelectionShowsDetailedSavedAccounts(t *testing.T) {
 	if got := strings.Join(calls[1], " "); got != "use 2 --agent claude --yes" {
 		t.Fatalf("use args = %q", got)
 	}
-	if !strings.Contains(updated.View(), "Switched claude to account #2") ||
+	if !strings.Contains(updated.View(), "Switched Claude to account #2") ||
 		strings.Contains(updated.View(), "Current accounts") {
 		t.Fatalf("view:\n%s", updated.View())
 	}

@@ -3,17 +3,20 @@ package provider
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/annapo99/agent-switch/internal/model"
 )
 
 type fakeKeychain struct {
-	item   *KeychainItem
-	writes []KeychainItem
+	item     *KeychainItem
+	writeErr error
+	writes   []KeychainItem
 }
 
 func (f *fakeKeychain) IsAvailable(home string) bool { return true }
@@ -21,6 +24,9 @@ func (f *fakeKeychain) ReadItem(service string) (*KeychainItem, error) {
 	return f.item, nil
 }
 func (f *fakeKeychain) WriteItem(service, account, secret string) error {
+	if f.writeErr != nil {
+		return f.writeErr
+	}
 	f.item = &KeychainItem{Account: account, Secret: secret}
 	f.writes = append(f.writes, *f.item)
 	return nil
@@ -44,6 +50,19 @@ func writeJSON(t *testing.T, home, rel string, payload any) {
 func readJSONFile(t *testing.T, home, rel string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func readJSONPath(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +184,162 @@ func TestKeychainSnapshotAndApplyRoundTripsSecret(t *testing.T) {
 	}
 	if len(backend.writes) != 1 || backend.writes[0].Secret != original {
 		t.Fatalf("writes = %+v", backend.writes)
+	}
+}
+
+func TestKeychainSnapshotStoresClaudeOAuthAccountConfig(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"projects": map[string]any{"keep": true},
+		"oauthAccount": map[string]any{
+			"emailAddress":     "annapo@example.com",
+			"organizationName": "Example Team",
+		},
+	})
+	backend := &fakeKeychain{item: &KeychainItem{
+		Account: "Claude Code-credentials",
+		Secret:  `{"claudeAiOauth":{"accessToken":"target-access","refreshToken":"target-refresh"}}`,
+	}}
+	p := NewClaudeProvider(backend)
+	account, ok := p.Detect(home)
+	if !ok {
+		t.Fatal("expected account")
+	}
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+
+	if err := p.SaveSnapshot(home, account, profileDir); err != nil {
+		t.Fatal(err)
+	}
+
+	config := readJSONPath(t, filepath.Join(profileDir, "config.json"))
+	oauth, ok := config["oauthAccount"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing oauthAccount in config backup: %+v", config)
+	}
+	if oauth["emailAddress"] != "annapo@example.com" || oauth["organizationName"] != "Example Team" {
+		t.Fatalf("oauthAccount = %+v", oauth)
+	}
+	if _, hasProjects := config["projects"]; hasProjects {
+		t.Fatalf("config backup should only store oauthAccount: %+v", config)
+	}
+}
+
+func TestKeychainApplyRestoresCredentialAndClaudeOAuthAccount(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"projects": map[string]any{"keep": true},
+		"oauthAccount": map[string]any{
+			"emailAddress": "current@example.com",
+		},
+	})
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeJSON(t, profileDir, "keychain.json", map[string]string{
+		"service": ClaudeKeychainService,
+		"account": "Claude Code-credentials",
+		"secret":  `{"claudeAiOauth":{"accessToken":"target-access","refreshToken":"target-refresh"}}`,
+	})
+	writeJSON(t, profileDir, "config.json", map[string]any{
+		"oauthAccount": map[string]any{
+			"emailAddress":     "target@example.com",
+			"organizationName": "Target Team",
+		},
+	})
+	backend := &fakeKeychain{item: &KeychainItem{
+		Account: "Claude Code-credentials",
+		Secret:  `{"claudeAiOauth":{"accessToken":"current-access","refreshToken":"current-refresh"}}`,
+	}}
+	p := NewClaudeProvider(backend)
+
+	if err := p.ApplySnapshot(home, profileDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if backend.item.Secret != `{"claudeAiOauth":{"accessToken":"target-access","refreshToken":"target-refresh"}}` {
+		t.Fatalf("keychain secret = %q", backend.item.Secret)
+	}
+	config := readJSONFile(t, home, ".claude.json")
+	if _, ok := config["projects"].(map[string]any); !ok {
+		t.Fatalf("existing config keys were not preserved: %+v", config)
+	}
+	oauth, ok := config["oauthAccount"].(map[string]any)
+	if !ok {
+		t.Fatalf("oauthAccount missing: %+v", config)
+	}
+	if oauth["emailAddress"] != "target@example.com" || oauth["organizationName"] != "Target Team" {
+		t.Fatalf("oauthAccount = %+v", oauth)
+	}
+}
+
+func TestKeychainApplyRollsBackConfigWhenCredentialWriteFails(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{"emailAddress": "current@example.com"},
+	})
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeJSON(t, profileDir, "keychain.json", map[string]string{
+		"service": ClaudeKeychainService,
+		"account": "Claude Code-credentials",
+		"secret":  `{"claudeAiOauth":{"accessToken":"target-access"}}`,
+	})
+	writeJSON(t, profileDir, "config.json", map[string]any{
+		"oauthAccount": map[string]any{"emailAddress": "target@example.com"},
+	})
+	backend := &fakeKeychain{
+		item: &KeychainItem{
+			Account: "Claude Code-credentials",
+			Secret:  `{"claudeAiOauth":{"accessToken":"current-access"}}`,
+		},
+		writeErr: errors.New("keychain denied"),
+	}
+	p := NewClaudeProvider(backend)
+
+	err := p.ApplySnapshot(home, profileDir)
+
+	if err == nil || !strings.Contains(err.Error(), "keychain denied") {
+		t.Fatalf("err = %v", err)
+	}
+	config := readJSONFile(t, home, ".claude.json")
+	oauth := config["oauthAccount"].(map[string]any)
+	if oauth["emailAddress"] != "current@example.com" {
+		t.Fatalf("config was mutated after failed credential write: %+v", config)
+	}
+}
+
+func TestKeychainApplyCooperatesWithClaudeStaleLocks(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{"emailAddress": "current@example.com"},
+	})
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeJSON(t, profileDir, "keychain.json", map[string]string{
+		"service": ClaudeKeychainService,
+		"account": "Claude Code-credentials",
+		"secret":  `{"claudeAiOauth":{"accessToken":"target-access"}}`,
+	})
+	writeJSON(t, profileDir, "config.json", map[string]any{
+		"oauthAccount": map[string]any{"emailAddress": "target@example.com"},
+	})
+	for _, lockDir := range []string{".claude.lock", ".claude.json.lock"} {
+		path := filepath.Join(home, lockDir)
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-20 * time.Second)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backend := &fakeKeychain{item: &KeychainItem{Account: "Claude Code-credentials", Secret: `{"claudeAiOauth":{"accessToken":"current-access"}}`}}
+	p := NewClaudeProvider(backend)
+
+	if err := p.ApplySnapshot(home, profileDir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, lockDir := range []string{".claude.lock", ".claude.json.lock"} {
+		if _, err := os.Stat(filepath.Join(home, lockDir)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s still exists, err=%v", lockDir, err)
+		}
 	}
 }
 
