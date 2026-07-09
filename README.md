@@ -59,6 +59,24 @@ also works.
 To verify the installer before running it, download `checksums.txt` from the
 same release and run `grep ' install.sh$' checksums.txt | shasum -a 256 -c -`.
 
+## Update
+
+Update an installed release with:
+
+```bash
+ags update
+```
+
+When a newer GitHub Release exists, the terminal UI shows:
+
+```text
+Update v0.1.1 available, run ags update
+```
+
+`ags update` downloads the latest release archive for your OS and architecture,
+verifies it with `checksums.txt`, and replaces the current `ags` binary.
+Network failures are non-blocking for the TUI notice.
+
 ## Usage
 
 Run `ags` to open the terminal UI:
@@ -86,9 +104,9 @@ exist. Choose `Use` to switch accounts and `Current` to see the active saved
 profiles.
 
 The same workflows are available as direct shell commands for scripting:
-`save`, `use`, `list`, `current`, and `remove`. Usage metadata is best-effort;
-if a metadata source is unavailable, `ags` still lists and switches saved
-accounts.
+`save`, `use`, `list`, `current`, `remove`, and `update`. Usage metadata is
+best-effort; if a metadata source is unavailable, `ags` still lists and switches
+saved accounts.
 
 ## Supported Agents
 
@@ -97,9 +115,10 @@ accounts.
 | Claude Code | macOS Keychain service `Claude Code-credentials`, then `~/.claude/.credentials.json` fallback | `~/.agent-switch/profiles/claude/<number>/` |
 | Codex | `~/.codex/auth.json` | `~/.agent-switch/profiles/codex/<number>/` |
 
-Claude usage metadata is enriched from `claude-swap` when `cswap` is installed.
-Codex usage metadata is enriched from the ChatGPT Codex usage endpoint when a
-valid ChatGPT auth token is available.
+Claude usage metadata is enriched from saved Claude OAuth snapshots when a
+valid access or refresh token is available. Codex usage metadata is enriched
+from the ChatGPT Codex usage endpoint when a valid ChatGPT auth token is
+available.
 
 ## Security Notes
 
@@ -124,6 +143,16 @@ cd agent-switch
 go test ./...
 go run ./cmd/ags
 ```
+
+To publish a new version, push a tag:
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+The release workflow builds signed-by-checksum release archives and publishes
+them as the latest GitHub Release.
 
 ## Roadmap
 

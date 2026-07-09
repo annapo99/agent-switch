@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,38 @@ func runService(t *testing.T, home string, args []string, input string) (int, st
 	var stderr bytes.Buffer
 	code := New(home).Run(args, strings.NewReader(input), &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
+}
+
+func TestUpdateCommandRunsUpdater(t *testing.T) {
+	originalRunUpdater := runUpdater
+	defer func() { runUpdater = originalRunUpdater }()
+	var gotHome string
+	var gotVersion string
+	runUpdater = func(home, version string, stdout, stderr io.Writer) int {
+		gotHome = home
+		gotVersion = version
+		_, _ = io.WriteString(stdout, "Updated ags to v9.9.9\n")
+		return 0
+	}
+	home := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := NewWithVersion(home, "v1.2.3").Run([]string{"update"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 || gotHome != home || gotVersion != "v1.2.3" ||
+		!strings.Contains(stdout.String(), "Updated ags to v9.9.9") ||
+		stderr.String() != "" {
+		t.Fatalf("code=%d home=%q version=%q stdout=%q stderr=%q", code, gotHome, gotVersion, stdout.String(), stderr.String())
+	}
+}
+
+func TestHelpIncludesUpdate(t *testing.T) {
+	code, out, errOut := runService(t, t.TempDir(), []string{"--help"}, "")
+
+	if code != 0 || errOut != "" || !strings.Contains(out, "update") {
+		t.Fatalf("code=%d stderr=%q out=\n%s", code, errOut, out)
+	}
 }
 
 func TestSaveSingleDetectedAccountAsksOnceAndSavesNextNumber(t *testing.T) {
@@ -129,6 +162,36 @@ func TestSaveAlreadySavedAccountDoesNotPrompt(t *testing.T) {
 	}
 	if strings.Contains(out, "Save this account?") {
 		t.Fatalf("unexpected prompt:\n%s", out)
+	}
+}
+
+func TestSaveSameLabelWithNewFingerprintUpdatesExistingProfile(t *testing.T) {
+	home := t.TempDir()
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo@example.com", "accessToken": "test-token-1"})
+	if code, _, _ := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+		t.Fatalf("first save code = %d", code)
+	}
+	firstManifest := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/manifest.json")
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo@example.com", "accessToken": "test-token-2"})
+
+	code, out, errOut := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, "")
+
+	if code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q out=%q", code, errOut, out)
+	}
+	if !strings.Contains(out, "Updated claude account #1") || strings.Contains(out, "Saved claude account #2") {
+		t.Fatalf("out:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/2/manifest.json")); !os.IsNotExist(err) {
+		t.Fatalf("duplicate manifest should not exist: %v", err)
+	}
+	nextManifest := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/manifest.json")
+	if nextManifest["fingerprint"] == firstManifest["fingerprint"] {
+		t.Fatalf("fingerprint was not updated: %#v", nextManifest)
+	}
+	snapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/files/.claude/.credentials.json")
+	if snapshot["accessToken"] != "test-token-2" {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
 

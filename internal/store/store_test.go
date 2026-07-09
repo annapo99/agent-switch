@@ -77,7 +77,7 @@ func TestCreateProfilePersistsManifestAndMetadata(t *testing.T) {
 	}
 }
 
-func TestFindDuplicateUsesAgentAndFingerprint(t *testing.T) {
+func TestFindDuplicateUsesAgentAndStableIdentity(t *testing.T) {
 	s := New(t.TempDir())
 	if _, err := s.CreateProfile(active("claude", "a@example.com", "same", nil)); err != nil {
 		t.Fatal(err)
@@ -93,6 +93,10 @@ func TestFindDuplicateUsesAgentAndFingerprint(t *testing.T) {
 	codex, ok := s.FindDuplicate(active("codex", "other@example.com", "same", nil))
 	if !ok || codex.Agent != "codex" || codex.Number != 1 {
 		t.Fatalf("codex duplicate = %+v ok=%v", codex, ok)
+	}
+	rotated, ok := s.FindDuplicate(active("claude", "A@EXAMPLE.COM", "rotated-fingerprint", nil))
+	if !ok || rotated.Agent != "claude" || rotated.Number != 1 {
+		t.Fatalf("rotated duplicate = %+v ok=%v", rotated, ok)
 	}
 }
 

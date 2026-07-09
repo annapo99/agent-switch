@@ -58,6 +58,29 @@ func TestInitialViewShowsRepositoryURL(t *testing.T) {
 	}
 }
 
+func TestInitialViewShowsUpdateNoticeAfterCheck(t *testing.T) {
+	model := newModelWithUpdateChecker(
+		func([]string) commandResult {
+			t.Fatal("runner should not be called")
+			return commandResult{}
+		},
+		func() (string, bool) {
+			return "Update v0.2.0 available, run ags update", true
+		},
+	)
+
+	cmd := model.Init()
+	if cmd == nil {
+		t.Fatal("expected update check command")
+	}
+	next, _ := model.Update(cmd())
+	updated := next.(uiModel)
+
+	if !strings.Contains(updated.View(), "Update v0.2.0 available, run ags update") {
+		t.Fatalf("view:\n%s", updated.View())
+	}
+}
+
 func TestServiceRunnerForcesColorForBufferedCommandOutput(t *testing.T) {
 	home := t.TempDir()
 	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{
@@ -97,6 +120,25 @@ func TestOutputViewPreservesCommandOutputANSI(t *testing.T) {
 	}
 	if !strings.Contains(view, coloredOutput) {
 		t.Fatalf("expected command ANSI to be preserved:\n%q", view)
+	}
+}
+
+func TestOutputViewDoesNotRepeatCommandTitleLine(t *testing.T) {
+	model := newModel(func([]string) commandResult {
+		t.Fatal("runner should not be called")
+		return commandResult{}
+	})
+	model.screen = screenOutput
+	model.title = "Saved accounts"
+	model.output = "Saved accounts\n\nClaude\n  1: annapo@example.com"
+
+	view := model.View()
+
+	if strings.Count(view, "Saved accounts") != 1 {
+		t.Fatalf("view:\n%s", view)
+	}
+	if !strings.Contains(view, "Claude\n  1: annapo@example.com") {
+		t.Fatalf("view:\n%s", view)
 	}
 }
 

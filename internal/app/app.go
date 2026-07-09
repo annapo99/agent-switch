@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,11 +14,13 @@ import (
 	"github.com/annapo99/agent-switch/internal/provider"
 	"github.com/annapo99/agent-switch/internal/render"
 	"github.com/annapo99/agent-switch/internal/store"
+	"github.com/annapo99/agent-switch/internal/update"
 	"github.com/annapo99/agent-switch/internal/usage"
 )
 
 type Service struct {
 	home          string
+	version       string
 	providers     []provider.Provider
 	usageProvider usage.Provider
 	store         *store.Store
@@ -27,6 +30,20 @@ var shouldColor = func(stdout any) bool {
 	return render.ShouldColor(stdout)
 }
 
+var runUpdater = func(home, version string, stdout, stderr io.Writer) int {
+	result, err := update.Update(context.Background(), update.Config{Home: home, CurrentVersion: version})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if result.Updated {
+		fmt.Fprintf(stdout, "Updated ags to %s\n", result.Version)
+		return 0
+	}
+	fmt.Fprintln(stdout, "ags is up to date")
+	return 0
+}
+
 type options struct {
 	agent string
 	yes   bool
@@ -34,12 +51,21 @@ type options struct {
 }
 
 func New(home string) *Service {
-	return NewWithUsageProvider(home, usage.DefaultProvider())
+	return NewWithVersion(home, "dev")
+}
+
+func NewWithVersion(home, version string) *Service {
+	return NewWithUsageProviderAndVersion(home, usage.DefaultProvider(), version)
 }
 
 func NewWithUsageProvider(home string, usageProvider usage.Provider) *Service {
+	return NewWithUsageProviderAndVersion(home, usageProvider, "dev")
+}
+
+func NewWithUsageProviderAndVersion(home string, usageProvider usage.Provider, version string) *Service {
 	return &Service{
 		home:          home,
+		version:       version,
 		providers:     provider.DefaultProviders(),
 		usageProvider: usageProvider,
 		store:         store.New(home),
@@ -95,6 +121,8 @@ func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			return 2
 		}
 		return s.Remove(number, stdout, stdin, opts.agent, opts.yes)
+	case "update":
+		return runUpdater(s.home, s.version, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "Unknown command: %s\n", command)
 		return 2
@@ -130,14 +158,29 @@ func (s *Service) Save(stdout io.Writer, stdin io.Reader, agent string, yes bool
 
 	if len(newItems) == 0 {
 		color := shouldColor(stdout)
+		updated := false
 		for _, item := range duplicates {
 			fmt.Fprintf(stdout, "Detected %s account\n\n", item.provider.DisplayName())
 			for _, line := range render.AccountSaveTree(item.account, 0, 0, item.duplicate.Number, color) {
 				fmt.Fprintln(stdout, line)
 			}
 			fmt.Fprintln(stdout)
+			if item.duplicate.Fingerprint != item.account.Fingerprint {
+				profile, removed, err := s.updateAccount(item.provider, item.account, item.duplicate)
+				if err != nil {
+					fmt.Fprintln(stdout, err)
+					return 1
+				}
+				fmt.Fprintf(stdout, "Updated %s account #%d\n", profile.Agent, profile.Number)
+				for _, removedProfile := range removed {
+					fmt.Fprintf(stdout, "Removed duplicate %s account #%d\n", removedProfile.Agent, removedProfile.Number)
+				}
+				updated = true
+			}
 		}
-		fmt.Fprintln(stdout, "Nothing to save.")
+		if !updated {
+			fmt.Fprintln(stdout, "Nothing to save.")
+		}
 		return 0
 	}
 
@@ -389,6 +432,18 @@ func (s *Service) saveAccount(provider provider.Provider, account model.ActiveAc
 	return profile, nil
 }
 
+func (s *Service) updateAccount(provider provider.Provider, account model.ActiveAccount, existing model.Profile) (model.Profile, []model.Profile, error) {
+	if err := provider.SaveSnapshot(s.home, account, s.store.ProfileDir(existing.Agent, existing.Number)); err != nil {
+		return model.Profile{}, nil, err
+	}
+	profile, err := s.store.UpdateProfile(existing, account)
+	if err != nil {
+		return model.Profile{}, nil, err
+	}
+	removed := s.store.RemoveDuplicateProfiles(account, profile.Number)
+	return profile, removed, nil
+}
+
 func (s *Service) resolveProfile(matches []model.Profile, stdout io.Writer, stdin io.Reader, prompt string, yes bool) (model.Profile, bool) {
 	if len(matches) == 1 {
 		return matches[0], true
@@ -574,17 +629,18 @@ func writeJSON(stdout io.Writer, value any) {
 }
 
 func printHelp(stdout io.Writer) {
-	fmt.Fprintln(stdout, "usage: ags [-h] {save,use,list,current,remove} ...")
+	fmt.Fprintln(stdout, "usage: ags [-h] {save,use,list,current,remove,update} ...")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Switch accounts across AI coding agents without logging out.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "positional arguments:")
-	fmt.Fprintln(stdout, "  {save,use,list,current,remove}")
+	fmt.Fprintln(stdout, "  {save,use,list,current,remove,update}")
 	fmt.Fprintln(stdout, "    save                save the current active account")
 	fmt.Fprintln(stdout, "    use                 switch to a saved account number")
 	fmt.Fprintln(stdout, "    list                list saved accounts")
 	fmt.Fprintln(stdout, "    current             show active saved accounts")
 	fmt.Fprintln(stdout, "    remove              remove a saved account number")
+	fmt.Fprintln(stdout, "    update              update ags to the latest release")
 }
 
 type flusher interface {

@@ -88,6 +88,151 @@ func TestTokenStatusTextMapsOAuthRowByEmail(t *testing.T) {
 	}
 }
 
+func TestClaudeOAuthProviderLoadsSavedSnapshotUsageAndOAuth(t *testing.T) {
+	useSeoulTime(t)
+
+	home := t.TempDir()
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/manifest.json", map[string]any{
+		"agent":        "claude",
+		"display_name": "Claude",
+		"number":       1,
+		"label":        "annapo.claude@example.com",
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": "Claude Code-credentials",
+		"account": "annapo",
+		"secret":  `{"claudeAiOauth":{"accessToken":"claude-access-token","refreshToken":"claude-refresh-token","expiresAt":1783504032000}}`,
+	})
+	provider := ClaudeOAuthProvider{
+		Fetcher: func(token string) (map[string]any, error) {
+			if token != "claude-access-token" {
+				t.Fatalf("token = %q", token)
+			}
+			return map[string]any{
+				"five_hour": map[string]any{
+					"utilization": float64(48),
+					"resets_at":   "2026-07-08T09:47:12Z",
+				},
+				"seven_day": map[string]any{
+					"utilization": float64(27),
+					"resets_at":   "2026-07-12T17:59:00Z",
+				},
+				"limits": []any{
+					map[string]any{
+						"percent":   float64(15),
+						"resets_at": "2026-07-12T17:59:00Z",
+						"scope": map[string]any{
+							"model": map[string]any{"display_name": "Fable"},
+						},
+					},
+				},
+			}, nil
+		},
+		RestrictToCurrentHome: false,
+		NowEpoch:              1783486262,
+	}
+
+	metadata := provider.Load(home)
+
+	key := model.MetadataKey{Agent: "claude", Label: "annapo.claude@example.com"}
+	got := metadata[key]
+	rows := got["usage_limits"].([]any)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %#v", rows)
+	}
+	if rows[0].(map[string]any)["reset_at"] != "18:47" || rows[0].(map[string]any)["remaining"] != "in 4h 56m" {
+		t.Fatalf("first row = %#v", rows[0])
+	}
+	if rows[2].(map[string]any)["label"] != "Fable" {
+		t.Fatalf("scoped row = %#v", rows[2])
+	}
+	if got.String("oauth_status") != "oauth: fresh, refresh token yes, expires 18:47 in 4h 56m" {
+		t.Fatalf("oauth = %#v", got)
+	}
+}
+
+func TestClaudeOAuthProviderRefreshesExpiredSnapshotBeforeUsageFetch(t *testing.T) {
+	useSeoulTime(t)
+
+	home := t.TempDir()
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/manifest.json", map[string]any{
+		"agent":        "claude",
+		"display_name": "Claude",
+		"number":       1,
+		"label":        "annapo.claude@example.com",
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": "Claude Code-credentials",
+		"account": "annapo",
+		"secret":  `{"claudeAiOauth":{"accessToken":"expired-token","refreshToken":"claude-refresh-token","expiresAt":1783480000000}}`,
+	})
+	provider := ClaudeOAuthProvider{
+		Fetcher: func(token string) (map[string]any, error) {
+			if token != "fresh-token" {
+				t.Fatalf("token = %q", token)
+			}
+			return map[string]any{
+				"five_hour": map[string]any{"utilization": float64(12)},
+			}, nil
+		},
+		TokenRefresher: func(credentials string) (string, error) {
+			if !strings.Contains(credentials, "expired-token") {
+				t.Fatalf("credentials = %q", credentials)
+			}
+			return `{"claudeAiOauth":{"accessToken":"fresh-token","refreshToken":"fresh-refresh-token","expiresAt":1783504032000}}`, nil
+		},
+		RestrictToCurrentHome: false,
+		NowEpoch:              1783486262,
+	}
+
+	metadata := provider.Load(home)
+
+	key := model.MetadataKey{Agent: "claude", Label: "annapo.claude@example.com"}
+	rows := metadata[key]["usage_limits"].([]any)
+	if rows[0].(map[string]any)["used_percentage"] != float64(12) {
+		t.Fatalf("rows = %#v", rows)
+	}
+	snapshot := readJSON(filepath.Join(home, ".agent-switch/profiles/claude/1/keychain.json"))
+	if !strings.Contains(snapshot["secret"].(string), "fresh-token") {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestClaudeOAuthProviderMarksInvalidRefreshToken(t *testing.T) {
+	useSeoulTime(t)
+
+	home := t.TempDir()
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/manifest.json", map[string]any{
+		"agent":        "claude",
+		"display_name": "Claude",
+		"number":       1,
+		"label":        "annapo.claude@example.com",
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": "Claude Code-credentials",
+		"account": "annapo",
+		"secret":  `{"claudeAiOauth":{"accessToken":"expired-token","refreshToken":"dead-refresh-token","expiresAt":1783480000000}}`,
+	})
+	provider := ClaudeOAuthProvider{
+		Fetcher: func(token string) (map[string]any, error) {
+			t.Fatalf("fetch should not run after invalid refresh")
+			return nil, nil
+		},
+		TokenRefresher: func(credentials string) (string, error) {
+			return "", errInvalidGrant
+		},
+		RestrictToCurrentHome: false,
+		NowEpoch:              1783486262,
+	}
+
+	metadata := provider.Load(home)
+
+	key := model.MetadataKey{Agent: "claude", Label: "annapo.claude@example.com"}
+	if got := metadata[key].String("oauth_status"); !strings.Contains(got, "refresh token invalid") {
+		t.Fatalf("oauth = %q", got)
+	}
+}
+
 func TestCodexPayloadMapsUsagePlanAndOAuth(t *testing.T) {
 	useSeoulTime(t)
 

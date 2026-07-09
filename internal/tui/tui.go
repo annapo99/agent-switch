@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/annapo99/agent-switch/internal/app"
 	"github.com/annapo99/agent-switch/internal/model"
 	"github.com/annapo99/agent-switch/internal/render"
+	"github.com/annapo99/agent-switch/internal/update"
 )
 
 const (
@@ -31,6 +33,7 @@ type commandResult struct {
 }
 
 type commandRunner func(args []string) commandResult
+type updateChecker func() (string, bool)
 
 type screen int
 
@@ -67,6 +70,10 @@ type profilesFinishedMsg struct {
 
 type saveCandidatesFinishedMsg struct {
 	result commandResult
+}
+
+type updateNoticeMsg struct {
+	text string
 }
 
 type spinnerTickMsg struct{}
@@ -115,6 +122,7 @@ var (
 
 type uiModel struct {
 	runner         commandRunner
+	updateChecker  updateChecker
 	screen         screen
 	cursor         int
 	profileCursor  int
@@ -125,11 +133,21 @@ type uiModel struct {
 	title          string
 	output         string
 	loadingDetail  string
+	updateNotice   string
 	spinner        int
 }
 
 func Run(home string, stdin io.Reader, stdout, stderr io.Writer) int {
-	program := tea.NewProgram(newModel(newServiceRunner(app.New(home))), tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithAltScreen())
+	return RunWithVersion(home, stdin, stdout, stderr, "dev")
+}
+
+func RunWithVersion(home string, stdin io.Reader, stdout, stderr io.Writer, version string) int {
+	program := tea.NewProgram(
+		newModelWithUpdateChecker(newServiceRunner(app.NewWithVersion(home, version)), defaultUpdateChecker(home, version)),
+		tea.WithInput(stdin),
+		tea.WithOutput(stdout),
+		tea.WithAltScreen(),
+	)
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -169,10 +187,23 @@ func runWithForcedColor(run func() int) int {
 }
 
 func newModel(runner commandRunner) uiModel {
-	return uiModel{runner: runner}
+	return newModelWithUpdateChecker(runner, nil)
+}
+
+func newModelWithUpdateChecker(runner commandRunner, checker updateChecker) uiModel {
+	return uiModel{runner: runner, updateChecker: checker}
 }
 
 func (m uiModel) Init() tea.Cmd {
+	if m.updateChecker != nil {
+		return func() tea.Msg {
+			text, ok := m.updateChecker()
+			if !ok {
+				return updateNoticeMsg{}
+			}
+			return updateNoticeMsg{text: text}
+		}
+	}
 	return nil
 }
 
@@ -184,6 +215,9 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.finishProfiles(msg.action, msg.result), nil
 	case saveCandidatesFinishedMsg:
 		return m.finishSaveCandidates(msg.result), nil
+	case updateNoticeMsg:
+		m.updateNotice = msg.text
+		return m, nil
 	case spinnerTickMsg:
 		if m.screen != screenLoading {
 			return m, nil
@@ -451,6 +485,10 @@ func (m uiModel) menuView() string {
 	b.WriteString(subtitleStyle.Render("Switch AI coding agent accounts"))
 	b.WriteString("\n")
 	b.WriteString(linkStyle.Render(repositoryURL))
+	if m.updateNotice != "" {
+		b.WriteString("\n")
+		b.WriteString(shortcutStyle.Render(m.updateNotice))
+	}
 	b.WriteString("\n\n")
 	for index, item := range menuItems {
 		cursor := " "
@@ -483,6 +521,18 @@ func (m uiModel) menuView() string {
 	return b.String()
 }
 
+func defaultUpdateChecker(home, version string) updateChecker {
+	return func() (string, bool) {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		info, err := update.CheckLatest(ctx, update.Config{Home: home, CurrentVersion: version})
+		if err != nil || !info.Available {
+			return "", false
+		}
+		return fmt.Sprintf("Update %s available, run ags update", info.Version), true
+	}
+}
+
 func (m uiModel) loadingView() string {
 	frame := spinnerFrames[m.spinner%len(spinnerFrames)]
 	var b strings.Builder
@@ -502,9 +552,21 @@ func (m uiModel) outputView() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(m.title))
 	b.WriteString("\n\n")
-	b.WriteString(m.output)
+	b.WriteString(outputWithoutRepeatedTitle(m.title, m.output))
 	b.WriteString("\n\n←/B Back  |  Q Quit\n")
 	return b.String()
+}
+
+func outputWithoutRepeatedTitle(title, output string) string {
+	trimmed := strings.TrimLeft(output, "\n")
+	if trimmed == title {
+		return ""
+	}
+	prefix := title + "\n"
+	if strings.HasPrefix(trimmed, prefix) {
+		return strings.TrimLeft(strings.TrimPrefix(trimmed, title), "\n")
+	}
+	return output
 }
 
 func (m uiModel) profilesView() string {

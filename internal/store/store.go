@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/annapo99/agent-switch/internal/model"
@@ -36,27 +37,28 @@ func (s *Store) NextNumber(agent string) int {
 
 func (s *Store) CreateProfile(account model.ActiveAccount) (model.Profile, error) {
 	number := s.NextNumber(account.Agent)
-	profile := model.Profile{
-		Agent:       account.Agent,
-		DisplayName: account.DisplayName,
-		Number:      number,
-		Label:       account.Label,
-		Fingerprint: account.Fingerprint,
-		Source:      account.Source,
-		AuthFiles:   append([]string{}, account.AuthFiles...),
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
-		Metadata:    cloneMetadata(account.Metadata),
-	}
+	profile := profileFromAccount(account, number, time.Now().UTC().Format(time.RFC3339Nano))
 	dir := s.ProfileDir(account.Agent, number)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return model.Profile{}, err
 	}
-	data, err := json.MarshalIndent(profile, "", "  ")
-	if err != nil {
+	if err := writeProfile(filepath.Join(dir, "manifest.json"), profile); err != nil {
 		return model.Profile{}, err
 	}
-	data = append(data, '\n')
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o600); err != nil {
+	return profile, nil
+}
+
+func (s *Store) UpdateProfile(existing model.Profile, account model.ActiveAccount) (model.Profile, error) {
+	createdAt := existing.CreatedAt
+	if createdAt == "" {
+		createdAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	profile := profileFromAccount(account, existing.Number, createdAt)
+	dir := s.ProfileDir(existing.Agent, existing.Number)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return model.Profile{}, err
+	}
+	if err := writeProfile(filepath.Join(dir, "manifest.json"), profile); err != nil {
 		return model.Profile{}, err
 	}
 	return profile, nil
@@ -110,11 +112,24 @@ func (s *Store) ListProfiles(agent string) []model.Profile {
 
 func (s *Store) FindDuplicate(account model.ActiveAccount) (model.Profile, bool) {
 	for _, profile := range s.ListProfiles(account.Agent) {
-		if profile.Fingerprint == account.Fingerprint {
+		if profileMatchesAccount(profile, account) {
 			return profile, true
 		}
 	}
 	return model.Profile{}, false
+}
+
+func (s *Store) RemoveDuplicateProfiles(account model.ActiveAccount, keepNumber int) []model.Profile {
+	removed := []model.Profile{}
+	for _, profile := range s.ListProfiles(account.Agent) {
+		if profile.Number == keepNumber || !profileMatchesAccount(profile, account) {
+			continue
+		}
+		if s.RemoveProfile(profile.Agent, profile.Number) {
+			removed = append(removed, profile)
+		}
+	}
+	return removed
 }
 
 func (s *Store) ProfilesByNumber(number int, agent string) []model.Profile {
@@ -165,4 +180,47 @@ func cloneMetadata(metadata model.Metadata) model.Metadata {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func profileFromAccount(account model.ActiveAccount, number int, createdAt string) model.Profile {
+	return model.Profile{
+		Agent:       account.Agent,
+		DisplayName: account.DisplayName,
+		Number:      number,
+		Label:       account.Label,
+		Fingerprint: account.Fingerprint,
+		Source:      account.Source,
+		AuthFiles:   append([]string{}, account.AuthFiles...),
+		CreatedAt:   createdAt,
+		Metadata:    cloneMetadata(account.Metadata),
+	}
+}
+
+func writeProfile(path string, profile model.Profile) error {
+	data, err := json.MarshalIndent(profile, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o600)
+}
+
+func profileMatchesAccount(profile model.Profile, account model.ActiveAccount) bool {
+	if profile.Agent != account.Agent {
+		return false
+	}
+	if profile.Fingerprint != "" && account.Fingerprint != "" && profile.Fingerprint == account.Fingerprint {
+		return true
+	}
+	profileLabel := normalizedIdentityLabel(profile.Label)
+	accountLabel := normalizedIdentityLabel(account.Label)
+	return profileLabel != "" && profileLabel == accountLabel
+}
+
+func normalizedIdentityLabel(label string) string {
+	normalized := strings.ToLower(strings.TrimSpace(label))
+	if normalized == "" || normalized == "unknown" {
+		return ""
+	}
+	return normalized
 }
