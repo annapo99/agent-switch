@@ -270,6 +270,60 @@ func TestKeychainApplyRestoresCredentialAndClaudeOAuthAccount(t *testing.T) {
 	}
 }
 
+func TestKeychainApplySynthesizesClaudeOAuthAccountForLegacyProfile(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"projects": map[string]any{"keep": true},
+		"oauthAccount": map[string]any{
+			"emailAddress":     "stale@example.com",
+			"organizationName": "Stale Team",
+		},
+	})
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/2")
+	writeJSON(t, profileDir, "manifest.json", model.Profile{
+		Agent:       "claude",
+		DisplayName: "Claude",
+		Number:      2,
+		Label:       "target@example.com",
+		Metadata: model.Metadata{
+			"organization_name":            "Target Team",
+			"organization_rate_limit_tier": "default_raven",
+			"user_rate_limit_tier":         "default_claude_max_5x",
+			"seat_tier":                    "team_tier_1",
+		},
+	})
+	writeJSON(t, profileDir, "keychain.json", map[string]string{
+		"service": ClaudeKeychainService,
+		"account": "Claude Code-credentials",
+		"secret":  `{"claudeAiOauth":{"accessToken":"target-access","refreshToken":"target-refresh"}}`,
+	})
+	backend := &fakeKeychain{item: &KeychainItem{
+		Account: "Claude Code-credentials",
+		Secret:  `{"claudeAiOauth":{"accessToken":"current-access","refreshToken":"current-refresh"}}`,
+	}}
+	p := NewClaudeProvider(backend)
+
+	if err := p.ApplySnapshot(home, profileDir); err != nil {
+		t.Fatal(err)
+	}
+
+	config := readJSONFile(t, home, ".claude.json")
+	if _, ok := config["projects"].(map[string]any); !ok {
+		t.Fatalf("existing config keys were not preserved: %+v", config)
+	}
+	oauth, ok := config["oauthAccount"].(map[string]any)
+	if !ok {
+		t.Fatalf("oauthAccount missing: %+v", config)
+	}
+	if oauth["emailAddress"] != "target@example.com" ||
+		oauth["organizationName"] != "Target Team" ||
+		oauth["organizationRateLimitTier"] != "default_raven" ||
+		oauth["userRateLimitTier"] != "default_claude_max_5x" ||
+		oauth["seatTier"] != "team_tier_1" {
+		t.Fatalf("oauthAccount = %+v", oauth)
+	}
+}
+
 func TestKeychainApplyRollsBackConfigWhenCredentialWriteFails(t *testing.T) {
 	home := t.TempDir()
 	writeJSON(t, home, ".claude.json", map[string]any{

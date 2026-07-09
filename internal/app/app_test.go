@@ -282,6 +282,34 @@ func TestListJSONMarksActiveProfile(t *testing.T) {
 	}
 }
 
+func TestListJSONMarksActiveProfileWhenTokenFingerprintChanges(t *testing.T) {
+	home := t.TempDir()
+	writeJSONFixture(t, home, ".codex/auth.json", map[string]any{
+		"email":        "annapo.codex@example.com",
+		"access_token": "first-token",
+	})
+	if code, _, _ := runService(t, home, []string{"save", "--agent", "codex", "--yes"}, ""); code != 0 {
+		t.Fatalf("save codex code = %d", code)
+	}
+	writeJSONFixture(t, home, ".codex/auth.json", map[string]any{
+		"email":        "annapo.codex@example.com",
+		"access_token": "refreshed-token",
+	})
+
+	code, out, errOut := runService(t, home, []string{"list", "--json"}, "")
+
+	if code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q out=%q", code, errOut, out)
+	}
+	var profiles []map[string]any
+	if err := json.Unmarshal([]byte(out), &profiles); err != nil {
+		t.Fatalf("json error: %v\n%s", err, out)
+	}
+	if len(profiles) != 1 || profiles[0]["active"] != true {
+		t.Fatalf("profiles = %#v", profiles)
+	}
+}
+
 func TestUseAmbiguousNumberAsksOnceAndAppliesSelectedAgent(t *testing.T) {
 	home := t.TempDir()
 	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo@example.com", "accessToken": "claude-test-token"})

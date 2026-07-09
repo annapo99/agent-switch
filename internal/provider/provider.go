@@ -292,7 +292,7 @@ func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, d
 	if err := p.keychain.WriteItem(service, snapshot["account"], secret); err != nil {
 		return err
 	}
-	if err := applyClaudeConfigSnapshot(home, profileDir); err != nil {
+	if err := applyClaudeConfigSnapshotOrProfileFallback(home, profileDir); err != nil {
 		if rollbackItem != nil {
 			_ = p.keychain.WriteItem(service, rollbackItem.Account, rollbackItem.Secret)
 		}
@@ -420,14 +420,70 @@ func writeClaudeConfigSnapshot(home, profileDir string) error {
 }
 
 func applyClaudeConfigSnapshot(home, profileDir string) error {
-	targetConfig, ok, err := readClaudeConfigSnapshot(profileDir)
+	targetOAuth, ok, err := claudeOAuthAccountFromSnapshot(profileDir)
 	if err != nil || !ok {
 		return err
 	}
+	return writeClaudeOAuthAccountConfig(home, targetOAuth)
+}
+
+func applyClaudeConfigSnapshotOrProfileFallback(home, profileDir string) error {
+	targetOAuth, ok, err := claudeOAuthAccountFromSnapshot(profileDir)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		targetOAuth, ok, err = claudeOAuthAccountFromProfile(profileDir)
+	}
+	if err != nil || !ok {
+		return err
+	}
+	return writeClaudeOAuthAccountConfig(home, targetOAuth)
+}
+
+func claudeOAuthAccountFromSnapshot(profileDir string) (map[string]any, bool, error) {
+	targetConfig, ok, err := readClaudeConfigSnapshot(profileDir)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
 	targetOAuth, ok := targetConfig["oauthAccount"].(map[string]any)
 	if !ok || len(targetOAuth) == 0 {
-		return errors.New("invalid Claude oauthAccount backup")
+		return nil, false, errors.New("invalid Claude oauthAccount backup")
 	}
+	return targetOAuth, true, nil
+}
+
+func claudeOAuthAccountFromProfile(profileDir string) (map[string]any, bool, error) {
+	data, err := os.ReadFile(filepath.Join(profileDir, "manifest.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var profile model.Profile
+	if err := json.Unmarshal(data, &profile); err != nil {
+		return nil, false, err
+	}
+	email := strings.TrimSpace(profile.Label)
+	if email == "" || strings.EqualFold(email, "unknown") {
+		return nil, false, nil
+	}
+	oauth := map[string]any{"emailAddress": email}
+	for metadataKey, oauthKey := range map[string]string{
+		"organization_name":            "organizationName",
+		"organization_rate_limit_tier": "organizationRateLimitTier",
+		"user_rate_limit_tier":         "userRateLimitTier",
+		"seat_tier":                    "seatTier",
+	} {
+		if value := profile.Metadata.String(metadataKey); value != "" {
+			oauth[oauthKey] = value
+		}
+	}
+	return oauth, true, nil
+}
+
+func writeClaudeOAuthAccountConfig(home string, targetOAuth map[string]any) error {
 	configPath := filepath.Join(home, ".claude.json")
 	currentConfig := map[string]any{}
 	if existing, ok := readJSON(configPath); ok {

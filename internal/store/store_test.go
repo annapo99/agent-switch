@@ -100,6 +100,22 @@ func TestFindDuplicateUsesAgentAndStableIdentity(t *testing.T) {
 	}
 }
 
+func TestFindDuplicatePrefersFingerprintBeforeLabelFallback(t *testing.T) {
+	s := New(t.TempDir())
+	if _, err := s.CreateProfile(active("claude", "stale@example.com", "fp-stale", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateProfile(active("claude", "target@example.com", "fp-target", nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	profile, ok := s.FindDuplicate(active("claude", "stale@example.com", "fp-target", nil))
+
+	if !ok || profile.Number != 2 {
+		t.Fatalf("duplicate = %+v ok=%v", profile, ok)
+	}
+}
+
 func TestProfilesByNumberCanBeAmbiguousAcrossAgents(t *testing.T) {
 	s := New(t.TempDir())
 	if _, err := s.CreateProfile(active("claude", "a@example.com", "fp-a", nil)); err != nil {

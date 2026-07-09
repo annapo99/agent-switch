@@ -473,19 +473,25 @@ func (s *Service) resolveProfile(matches []model.Profile, stdout io.Writer, stdi
 	return matches[selected], true
 }
 
-func (s *Service) activeFingerprints() map[string]string {
-	active := map[string]string{}
+func (s *Service) activeProfileKeys() map[string]bool {
+	active := map[string]bool{}
 	for _, item := range s.detectedAccounts("") {
-		active[item.account.Agent] = item.account.Fingerprint
+		if profile, ok := s.store.FindDuplicate(item.account); ok {
+			active[profileKey(profile)] = true
+		}
 	}
 	return active
 }
 
 func (s *Service) markActiveProfiles(profiles []model.Profile) {
-	active := s.activeFingerprints()
+	active := s.activeProfileKeys()
 	for index := range profiles {
-		profiles[index].Active = active[profiles[index].Agent] == profiles[index].Fingerprint
+		profiles[index].Active = active[profileKey(profiles[index])]
 	}
+}
+
+func profileKey(profile model.Profile) string {
+	return profile.Agent + ":" + strconv.Itoa(profile.Number)
 }
 
 func (s *Service) withUsageMetadata(profiles []model.Profile) []model.Profile {
