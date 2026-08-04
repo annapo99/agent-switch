@@ -58,7 +58,9 @@ func TestHelpUsesAGSProgramName(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "usage: ags") || !strings.Contains(stdout.String(), "save") {
+	if !strings.Contains(stdout.String(), "usage: ags") ||
+		!strings.Contains(stdout.String(), "list") ||
+		strings.Contains(stdout.String(), "use                 ") {
 		t.Fatalf("help:\n%s", stdout.String())
 	}
 }

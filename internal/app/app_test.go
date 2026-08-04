@@ -20,6 +20,19 @@ func (f fakeUsage) Load(home string) map[model.MetadataKey]model.Metadata {
 	return f.metadata
 }
 
+type profileSnapshotUsage struct{}
+
+func (profileSnapshotUsage) Load(home string) map[model.MetadataKey]model.Metadata {
+	snapshot := readJSONFromPath(filepath.Join(home, ".agent-switch/profiles/claude/1/files/.claude/.credentials.json"))
+	status := "oauth: expired"
+	if snapshot["accessToken"] == "refreshed-token" {
+		status = "oauth: fresh"
+	}
+	return map[model.MetadataKey]model.Metadata{
+		{Agent: "claude", Label: "annapo@example.com"}: {"oauth_status": status},
+	}
+}
+
 func writeJSONFixture(t *testing.T, home, rel string, payload any) {
 	t.Helper()
 	path := filepath.Join(home, filepath.FromSlash(rel))
@@ -41,6 +54,18 @@ func readJSONFixture(t *testing.T, home, rel string) map[string]any {
 	var out map[string]any
 	if err := json.Unmarshal(data, &out); err != nil {
 		t.Fatal(err)
+	}
+	return out
+}
+
+func readJSONFromPath(path string) map[string]any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]any{}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return map[string]any{}
 	}
 	return out
 }
@@ -219,7 +244,7 @@ func TestSaveJSONListsDetectedCandidatesWithoutSaving(t *testing.T) {
 	}
 }
 
-func TestListCurrentUseAndRemove(t *testing.T) {
+func TestListUseAndRemove(t *testing.T) {
 	home := t.TempDir()
 	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "first@example.com", "accessToken": "first-test-token"})
 	if code, _, _ := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
@@ -247,7 +272,10 @@ func TestListCurrentUseAndRemove(t *testing.T) {
 	}
 
 	code, out, errOut = runService(t, home, []string{"current"}, "")
-	if code != 0 || errOut != "" || !strings.Contains(out, "1: first@example.com (active)") {
+	if code != 0 || errOut != "" ||
+		!strings.Contains(out, "List accounts") ||
+		!strings.Contains(out, "1: first@example.com (active)") ||
+		!strings.Contains(out, "2: second@example.com") {
 		t.Fatalf("current code=%d err=%q out=\n%s", code, errOut, out)
 	}
 
@@ -310,6 +338,30 @@ func TestListJSONMarksActiveProfileWhenTokenFingerprintChanges(t *testing.T) {
 	}
 }
 
+func TestListSyncsActiveDuplicateBeforeLoadingUsageMetadata(t *testing.T) {
+	home := t.TempDir()
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo@example.com", "accessToken": "expired-token"})
+	if code, _, _ := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+		t.Fatalf("save code = %d", code)
+	}
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo@example.com", "accessToken": "refreshed-token"})
+	service := NewWithUsageProvider(home, profileSnapshotUsage{})
+	var out bytes.Buffer
+
+	code := service.List(&out, "claude", false)
+
+	if code != 0 {
+		t.Fatalf("code = %d\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "└ • oauth: fresh") {
+		t.Fatalf("out:\n%s", out.String())
+	}
+	snapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/files/.claude/.credentials.json")
+	if snapshot["accessToken"] != "refreshed-token" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
 func TestUseAmbiguousNumberAsksOnceAndAppliesSelectedAgent(t *testing.T) {
 	home := t.TempDir()
 	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo@example.com", "accessToken": "claude-test-token"})
@@ -339,7 +391,7 @@ func TestUseAmbiguousNumberAsksOnceAndAppliesSelectedAgent(t *testing.T) {
 	}
 }
 
-func TestCurrentAddsUsageMetadata(t *testing.T) {
+func TestListAddsUsageMetadata(t *testing.T) {
 	home := t.TempDir()
 	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo.claude@example.com", "accessToken": "test-token-1"})
 	if code, _, _ := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
@@ -356,7 +408,7 @@ func TestCurrentAddsUsageMetadata(t *testing.T) {
 	}})
 	var out bytes.Buffer
 
-	code := service.Current(&out, "")
+	code := service.List(&out, "", false)
 
 	if code != 0 || !strings.Contains(out.String(), "1: annapo.claude@example.com [Example Team] (active)") ||
 		!strings.Contains(out.String(), "└ • oauth: fresh") {

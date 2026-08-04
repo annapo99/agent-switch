@@ -20,10 +20,8 @@ import (
 )
 
 const (
-	menuIndexCurrent = iota
-	menuIndexList
+	menuIndexList = iota
 	menuIndexSave
-	menuIndexUse
 	menuIndexRemove
 )
 
@@ -79,10 +77,8 @@ type updateNoticeMsg struct {
 type spinnerTickMsg struct{}
 
 var menuItems = []menuItem{
-	{title: "Current", description: "Show active accounts"},
-	{title: "List", description: "Browse saved accounts"},
+	{title: "List", description: "Show saved accounts"},
 	{title: "Save", description: "Save detected accounts"},
-	{title: "Use", description: "Switch account"},
 	{title: "Remove", description: "Delete saved profile"},
 }
 
@@ -299,14 +295,10 @@ func (m uiModel) selectCurrent() (tea.Model, tea.Cmd) {
 	}
 
 	switch m.cursor {
-	case menuIndexCurrent:
-		return m.startCommand("Current accounts", []string{"current"})
 	case menuIndexList:
-		return m.startCommand("Saved accounts", []string{"list"})
+		return m.startOpenProfiles(actionUse)
 	case menuIndexSave:
 		return m.startOpenSaveCandidates()
-	case menuIndexUse:
-		return m.startOpenProfiles(actionUse)
 	case menuIndexRemove:
 		return m.startOpenProfiles(actionRemove)
 	default:
@@ -348,7 +340,7 @@ func outputWithCode(result commandResult) string {
 }
 
 func (m uiModel) startOpenProfiles(action profileAction) (uiModel, tea.Cmd) {
-	title := "Choose account to use"
+	title := "List accounts"
 	if action == actionRemove {
 		title = "Choose account to remove"
 	}
@@ -570,7 +562,7 @@ func outputWithoutRepeatedTitle(title, output string) string {
 }
 
 func (m uiModel) profilesView() string {
-	title := "Choose account to use"
+	title := "List accounts"
 	if m.profileAction == actionSave {
 		title = "Choose account to save"
 	} else if m.profileAction == actionRemove {
@@ -584,7 +576,11 @@ func (m uiModel) profilesView() string {
 	} else {
 		m.writeProfileTrees(&b)
 	}
-	b.WriteString("\n↑↓ Select  |  →/Enter Open  |  R Refresh  |  ←/B Back  |  Q Quit\n")
+	if m.profileAction == actionUse {
+		b.WriteString("\n↑↓ Select  |  →/Enter Switch  |  R Refresh  |  ←/B Back  |  Q Quit\n")
+	} else {
+		b.WriteString("\n↑↓ Select  |  →/Enter Open  |  R Refresh  |  ←/B Back  |  Q Quit\n")
+	}
 	return b.String()
 }
 

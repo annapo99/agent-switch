@@ -104,13 +104,13 @@ func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		if !ok {
 			return 2
 		}
-		return s.List(stdout, opts.agent, opts.json)
+		return s.ListJSONAware(stdout, opts.agent, opts.json)
 	case "current":
 		opts, ok := parseOptions(args[1:], true, stdout, stderr)
 		if !ok {
 			return 2
 		}
-		return s.CurrentJSONAware(stdout, opts.agent, opts.json)
+		return s.ListJSONAware(stdout, opts.agent, opts.json)
 	case "remove":
 		number, rest, ok := parseNumber(args[1:], stderr)
 		if !ok {
@@ -294,60 +294,31 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 }
 
 func (s *Service) List(stdout io.Writer, agent string, jsonOutput bool) int {
-	profiles := s.withUsageMetadata(s.store.ListProfiles(agent))
-	s.markActiveProfiles(profiles)
-	if jsonOutput {
-		writeJSON(stdout, profiles)
-		return 0
-	}
-	if len(profiles) == 0 {
-		fmt.Fprintln(stdout, "No saved accounts.")
-		return 0
-	}
-	color := shouldColor(stdout)
-	fmt.Fprintln(stdout, "Saved accounts")
-	fmt.Fprintln(stdout)
-	for _, group := range groupProfiles(profiles) {
-		fmt.Fprintln(stdout, render.AgentHeading(group.name, color))
-		for _, profile := range group.profiles {
-			for _, line := range render.ProfileTree(profile, profile.Active, color) {
-				fmt.Fprintln(stdout, line)
-			}
-		}
-		fmt.Fprintln(stdout)
-	}
-	return 0
+	return s.ListJSONAware(stdout, agent, jsonOutput)
 }
 
 func (s *Service) Current(stdout io.Writer, agent string) int {
-	return s.CurrentJSONAware(stdout, agent, false)
+	return s.ListJSONAware(stdout, agent, false)
 }
 
-func (s *Service) CurrentJSONAware(stdout io.Writer, agent string, jsonOutput bool) int {
-	detected := s.detectedAccounts(agent)
-	var current []model.Profile
-	for _, item := range detected {
-		if duplicate, ok := s.store.FindDuplicate(item.account); ok {
-			duplicate.Active = true
-			current = append(current, duplicate)
-		}
-	}
-	current = s.withUsageMetadata(current)
+func (s *Service) ListJSONAware(stdout io.Writer, agent string, jsonOutput bool) int {
+	s.syncActiveProfiles(agent)
+	current := s.withUsageMetadata(s.store.ListProfiles(agent))
+	s.markActiveProfiles(current)
 	if jsonOutput {
 		writeJSON(stdout, current)
 		return 0
 	}
 	if len(current) == 0 {
-		fmt.Fprintln(stdout, "No active saved accounts.")
+		fmt.Fprintln(stdout, "No saved accounts.")
 		return 0
 	}
 	color := shouldColor(stdout)
-	fmt.Fprintln(stdout, "Current accounts")
+	fmt.Fprintln(stdout, "List accounts")
 	fmt.Fprintln(stdout)
 	for _, group := range groupProfiles(current) {
 		fmt.Fprintln(stdout, render.AgentHeading(group.name, color))
 		for _, profile := range group.profiles {
-			profile.Active = true
 			for _, line := range render.ProfileTree(profile, profile.Active, color) {
 				fmt.Fprintln(stdout, line)
 			}
@@ -388,6 +359,7 @@ type detectedAccount struct {
 }
 
 func (s *Service) SaveCandidates(agent string) []model.SaveCandidate {
+	s.syncActiveProfiles(agent)
 	detected := s.detectedAccounts(agent)
 	usageMetadata := map[model.MetadataKey]model.Metadata{}
 	if s.usageProvider != nil {
@@ -427,6 +399,16 @@ func (s *Service) detectedAccounts(agent string) []detectedAccount {
 		}
 	}
 	return detected
+}
+
+func (s *Service) syncActiveProfiles(agent string) {
+	for _, item := range s.detectedAccounts(agent) {
+		duplicate, ok := s.store.FindDuplicate(item.account)
+		if !ok || duplicate.Fingerprint == item.account.Fingerprint {
+			continue
+		}
+		_, _, _ = s.updateAccount(item.provider, item.account, duplicate)
+	}
 }
 
 func (s *Service) saveAccount(provider provider.Provider, account model.ActiveAccount) (model.Profile, error) {
@@ -643,16 +625,14 @@ func writeJSON(stdout io.Writer, value any) {
 }
 
 func printHelp(stdout io.Writer) {
-	fmt.Fprintln(stdout, "usage: ags [-h] {save,use,list,current,remove,update} ...")
+	fmt.Fprintln(stdout, "usage: ags [-h] {save,list,remove,update} ...")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Switch accounts across AI coding agents without logging out.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "positional arguments:")
-	fmt.Fprintln(stdout, "  {save,use,list,current,remove,update}")
+	fmt.Fprintln(stdout, "  {save,list,remove,update}")
 	fmt.Fprintln(stdout, "    save                save the current active account")
-	fmt.Fprintln(stdout, "    use                 switch to a saved account number")
-	fmt.Fprintln(stdout, "    list                list saved accounts")
-	fmt.Fprintln(stdout, "    current             show active saved accounts")
+	fmt.Fprintln(stdout, "    list                show saved accounts and active status")
 	fmt.Fprintln(stdout, "    remove              remove a saved account number")
 	fmt.Fprintln(stdout, "    update              update ags to the latest release")
 }

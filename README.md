@@ -10,13 +10,11 @@
 Switch AI coding agent accounts
 https://github.com/annapo99/agent-switch
 
-➤ 1. Current    Show active accounts
-  2. List       Browse saved accounts
-  3. Save       Save detected accounts
-  4. Use        Switch account
-  5. Remove     Delete saved profile
+➤ 1. List       Show saved accounts
+  2. Save       Save detected accounts
+  3. Remove     Delete saved profile
 
-Current accounts
+List accounts
 
 Claude
   2: annapo.claude@example.com [Example Team] (active)
@@ -89,24 +87,22 @@ ags
 Switch AI coding agent accounts
 https://github.com/annapo99/agent-switch
 
-➤ 1. Current    Show active accounts
-  2. List       Browse saved accounts
-  3. Save       Save detected accounts
-  4. Use        Switch account
-  5. Remove     Delete saved profile
+➤ 1. List       Show saved accounts
+  2. Save       Save detected accounts
+  3. Remove     Delete saved profile
 
 ↑↓ Select  |  →/Enter Open  |  ←/B Back  |  Q Quit
 ```
 
 Log in to Claude Code or Codex first, then open `ags` and choose `Save`. Saved
 profiles get short per-agent numbers, so `claude #1` and `codex #1` can both
-exist. Choose `Use` to switch accounts and `Current` to see the active saved
-profiles.
+exist. Choose `List` to see saved profiles with the active account marked, then
+select a profile to switch accounts.
 
-The same workflows are available as direct shell commands for scripting:
-`save`, `use`, `list`, `current`, `remove`, and `update`. Usage metadata is
-best-effort; if a metadata source is unavailable, `ags` still lists and switches
-saved accounts.
+Direct shell commands are available for scripting: `save`, `list`, `remove`,
+and `update`. The terminal UI `List` screen handles interactive switching.
+Usage metadata is best-effort; if a metadata source is unavailable, `ags` still
+lists and switches saved accounts.
 
 ## Supported Agents
 

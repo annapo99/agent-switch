@@ -21,8 +21,9 @@ func TestInitialViewShowsMenu(t *testing.T) {
 	view := model.View()
 
 	if !strings.Contains(view, "Switch AI coding agent accounts") ||
-		!strings.Contains(view, "Current") ||
-		!strings.Contains(view, "Use") ||
+		!strings.Contains(view, "List") ||
+		strings.Contains(view, "Current") ||
+		strings.Contains(view, "Use") ||
 		!strings.Contains(view, "Quit") {
 		t.Fatalf("view:\n%s", view)
 	}
@@ -110,7 +111,7 @@ func TestOutputViewPreservesCommandOutputANSI(t *testing.T) {
 		return commandResult{}
 	})
 	model.screen = screenOutput
-	model.title = "Current accounts"
+	model.title = "List accounts"
 	model.output = coloredOutput
 
 	view := model.View()
@@ -129,12 +130,12 @@ func TestOutputViewDoesNotRepeatCommandTitleLine(t *testing.T) {
 		return commandResult{}
 	})
 	model.screen = screenOutput
-	model.title = "Saved accounts"
-	model.output = "Saved accounts\n\nClaude\n  1: annapo@example.com"
+	model.title = "List accounts"
+	model.output = "List accounts\n\nClaude\n  1: annapo@example.com"
 
 	view := model.View()
 
-	if strings.Count(view, "Saved accounts") != 1 {
+	if strings.Count(view, "List accounts") != 1 {
 		t.Fatalf("view:\n%s", view)
 	}
 	if !strings.Contains(view, "Claude\n  1: annapo@example.com") {
@@ -161,14 +162,14 @@ func TestUpAndDownKeysMoveMenuCursor(t *testing.T) {
 	}
 }
 
-func TestRightKeyEntersCurrentSelection(t *testing.T) {
+func TestRightKeyEntersListSelection(t *testing.T) {
 	var called bool
 	model := newModel(func(args []string) commandResult {
 		called = true
-		if strings.Join(args, " ") != "current" {
+		if strings.Join(args, " ") != "list --json" {
 			t.Fatalf("args = %q", strings.Join(args, " "))
 		}
-		return commandResult{code: 0, output: "Current accounts\n\nClaude\n"}
+		return commandResult{code: 0, output: `[{"agent":"claude","display_name":"Claude","number":1,"label":"annapo@example.com"}]`}
 	})
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRight})
@@ -177,7 +178,7 @@ func TestRightKeyEntersCurrentSelection(t *testing.T) {
 	if called {
 		t.Fatal("runner should not be called before returned command runs")
 	}
-	if cmd == nil || !strings.Contains(loading.View(), "Loading Current accounts") {
+	if cmd == nil || !strings.Contains(loading.View(), "Loading List accounts") {
 		t.Fatalf("loading view:\n%s", loading.View())
 	}
 }
@@ -188,7 +189,7 @@ func TestLeftKeyGoesBack(t *testing.T) {
 		return commandResult{}
 	})
 	model.screen = screenOutput
-	model.title = "Saved accounts"
+	model.title = "List accounts"
 	model.output = "Claude"
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyLeft})
@@ -199,14 +200,14 @@ func TestLeftKeyGoesBack(t *testing.T) {
 	}
 }
 
-func TestCurrentMenuItemShowsLoadingBeforeCommandCompletes(t *testing.T) {
+func TestListMenuItemShowsSelectionAfterProfilesLoad(t *testing.T) {
 	var called bool
 	model := newModel(func(args []string) commandResult {
 		called = true
-		if strings.Join(args, " ") != "current" {
+		if strings.Join(args, " ") != "list --json" {
 			t.Fatalf("args = %q", strings.Join(args, " "))
 		}
-		return commandResult{code: 0, output: "Current accounts\n\nClaude\n"}
+		return commandResult{code: 0, output: `[{"agent":"claude","display_name":"Claude","number":1,"label":"annapo@example.com"}]`}
 	})
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -215,34 +216,51 @@ func TestCurrentMenuItemShowsLoadingBeforeCommandCompletes(t *testing.T) {
 	if called {
 		t.Fatal("runner should not be called before returned command runs")
 	}
-	if cmd == nil || !strings.Contains(loading.View(), "Loading Current accounts") {
+	if cmd == nil || !strings.Contains(loading.View(), "Loading List accounts") {
 		t.Fatalf("loading view:\n%s", loading.View())
 	}
 
 	next, _ = loading.Update(runPrimaryCmd(t, cmd))
 	updated := next.(uiModel)
 
-	if !called || !strings.Contains(updated.View(), "Current accounts") {
+	if !called ||
+		updated.screen != screenProfiles ||
+		!strings.Contains(updated.View(), "List accounts") ||
+		!strings.Contains(updated.View(), "1: annapo@example.com") {
 		t.Fatalf("called=%v view:\n%s", called, updated.View())
 	}
 }
 
-func TestCurrentMenuItemRunsCurrentCommand(t *testing.T) {
-	var gotArgs []string
+func TestListMenuItemSwitchesSelectedAccount(t *testing.T) {
+	var calls [][]string
 	model := newModel(func(args []string) commandResult {
-		gotArgs = append([]string{}, args...)
-		return commandResult{code: 0, output: "Current accounts\n\nClaude\n"}
+		calls = append(calls, append([]string{}, args...))
+		switch strings.Join(args, " ") {
+		case "list --json":
+			return commandResult{code: 0, output: `[{"agent":"claude","display_name":"Claude","number":1,"label":"annapo@example.com"}]`}
+		case "use 1 --agent claude --yes":
+			return commandResult{code: 0, output: "Switched Claude to account #1. Running sessions may take up to ~30s to pick it up.\n"}
+		default:
+			t.Fatalf("args = %q", strings.Join(args, " "))
+			return commandResult{}
+		}
 	})
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	loading := next.(uiModel)
 	next, _ = loading.Update(runPrimaryCmd(t, cmd))
+	profiles := next.(uiModel)
+	next, cmd = profiles.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	switching := next.(uiModel)
+	next, _ = switching.Update(runPrimaryCmd(t, cmd))
 	updated := next.(uiModel)
 
-	if strings.Join(gotArgs, " ") != "current" {
-		t.Fatalf("args = %q", strings.Join(gotArgs, " "))
+	if len(calls) != 2 ||
+		strings.Join(calls[0], " ") != "list --json" ||
+		strings.Join(calls[1], " ") != "use 1 --agent claude --yes" {
+		t.Fatalf("args = %#v", calls)
 	}
-	if !strings.Contains(updated.View(), "Current accounts") ||
+	if !strings.Contains(updated.View(), "Switched Claude to account #1") ||
 		!strings.Contains(updated.View(), "B Back") {
 		t.Fatalf("view:\n%s", updated.View())
 	}
@@ -309,12 +327,12 @@ func TestSaveMenuItemShowsDetailedDetectedAccountsBeforeSaving(t *testing.T) {
 		t.Fatalf("save args = %q", got)
 	}
 	if !strings.Contains(updated.View(), "Saved claude account #2") ||
-		strings.Contains(updated.View(), "Current accounts") {
+		strings.Contains(updated.View(), "List accounts") {
 		t.Fatalf("view:\n%s", updated.View())
 	}
 }
 
-func TestUseProfileSelectionShowsDetailedSavedAccounts(t *testing.T) {
+func TestListProfileSelectionShowsDetailedSavedAccounts(t *testing.T) {
 	var calls [][]string
 	model := newModel(func(args []string) commandResult {
 		calls = append(calls, append([]string{}, args...))
@@ -340,7 +358,7 @@ func TestUseProfileSelectionShowsDetailedSavedAccounts(t *testing.T) {
 			return commandResult{}
 		}
 	})
-	model.cursor = menuIndexUse
+	model.cursor = menuIndexList
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	loadingProfiles := next.(uiModel)
@@ -348,7 +366,7 @@ func TestUseProfileSelectionShowsDetailedSavedAccounts(t *testing.T) {
 	profiles := next.(uiModel)
 
 	view := profiles.View()
-	if !strings.Contains(view, "Choose account to use") ||
+	if !strings.Contains(view, "List accounts") ||
 		!strings.Contains(view, "Claude") ||
 		!strings.Contains(view, "2: annapo@example.com [Example Team] (active)") ||
 		!strings.Contains(view, "█████░░░░░") ||
@@ -369,7 +387,7 @@ func TestUseProfileSelectionShowsDetailedSavedAccounts(t *testing.T) {
 		t.Fatalf("use args = %q", got)
 	}
 	if !strings.Contains(updated.View(), "Switched Claude to account #2") ||
-		strings.Contains(updated.View(), "Current accounts") {
+		strings.Contains(updated.View(), "List accounts") {
 		t.Fatalf("view:\n%s", updated.View())
 	}
 }
