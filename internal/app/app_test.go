@@ -220,6 +220,112 @@ func TestSaveSameLabelWithNewFingerprintUpdatesExistingProfile(t *testing.T) {
 	}
 }
 
+func TestSaveSeparatesClaudeOrganizationsAndRotatesOnlyMatchingProfile(t *testing.T) {
+	home := t.TempDir()
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{
+		"email": "same@example.com", "accessToken": "team-token",
+	})
+	writeJSONFixture(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{
+			"emailAddress": "same@example.com", "accountUuid": "account-1",
+			"organizationUuid": "team-org", "organizationName": "Example Team",
+		},
+	})
+	if code, _, _ := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+		t.Fatalf("team save code = %d", code)
+	}
+
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{
+		"email": "same@example.com", "accessToken": "enterprise-token",
+	})
+	writeJSONFixture(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{
+			"emailAddress": "same@example.com", "accountUuid": "account-1",
+			"organizationUuid": "enterprise-org", "organizationName": "Example Enterprise",
+		},
+	})
+	code, out, errOut := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, "")
+	if code != 0 || errOut != "" || !strings.Contains(out, "Saved claude account #2") {
+		t.Fatalf("enterprise save code=%d stderr=%q out=%q", code, errOut, out)
+	}
+	enterpriseBefore := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/manifest.json")
+
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{
+		"email": "same@example.com", "accessToken": "team-rotated-token",
+	})
+	writeJSONFixture(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{
+			"emailAddress": "same@example.com", "accountUuid": "account-1",
+			"organizationUuid": "team-org", "organizationName": "Example Team",
+		},
+	})
+	code, out, errOut = runService(t, home, []string{"save", "--agent", "claude", "--yes"}, "")
+	if code != 0 || errOut != "" || !strings.Contains(out, "Updated claude account #1") {
+		t.Fatalf("team rotation code=%d stderr=%q out=%q", code, errOut, out)
+	}
+
+	team := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/manifest.json")
+	enterprise := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/manifest.json")
+	teamMetadata := team["metadata"].(map[string]any)
+	enterpriseMetadata := enterprise["metadata"].(map[string]any)
+	if teamMetadata[model.MetadataOrganizationUUID] != "team-org" ||
+		enterpriseMetadata[model.MetadataOrganizationUUID] != "enterprise-org" {
+		t.Fatalf("team=%#v enterprise=%#v", teamMetadata, enterpriseMetadata)
+	}
+	if enterprise["fingerprint"] != enterpriseBefore["fingerprint"] {
+		t.Fatalf("enterprise changed: before=%#v after=%#v", enterpriseBefore, enterprise)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/3/manifest.json")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected third profile: %v", err)
+	}
+}
+
+func TestListSyncsOnlyTheActiveClaudeOrganization(t *testing.T) {
+	home := t.TempDir()
+	saveOrganization := func(token, orgUUID, orgName string) {
+		t.Helper()
+		writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{
+			"email": "same@example.com", "accessToken": token,
+		})
+		writeJSONFixture(t, home, ".claude.json", map[string]any{
+			"oauthAccount": map[string]any{
+				"emailAddress": "same@example.com", "accountUuid": "account-1",
+				"organizationUuid": orgUUID, "organizationName": orgName,
+			},
+		})
+		if code, _, _ := runService(t, home, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+			t.Fatalf("save %s code = %d", orgUUID, code)
+		}
+	}
+	saveOrganization("team-token", "team-org", "Example Team")
+	saveOrganization("enterprise-token", "enterprise-org", "Example Enterprise")
+	teamBefore := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/manifest.json")
+	enterpriseBefore := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/manifest.json")
+
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{
+		"email": "same@example.com", "accessToken": "enterprise-rotated-token",
+	})
+	writeJSONFixture(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{
+			"emailAddress": "same@example.com", "accountUuid": "account-1",
+			"organizationUuid": "enterprise-org", "organizationName": "Example Enterprise",
+		},
+	})
+
+	code, _, errOut := runService(t, home, []string{"list", "--agent", "claude"}, "")
+	if code != 0 || errOut != "" {
+		t.Fatalf("list code=%d stderr=%q", code, errOut)
+	}
+	teamAfter := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/manifest.json")
+	enterpriseAfter := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/manifest.json")
+	if teamAfter["fingerprint"] != teamBefore["fingerprint"] {
+		t.Fatalf("team changed: before=%#v after=%#v", teamBefore, teamAfter)
+	}
+	if enterpriseAfter["fingerprint"] == enterpriseBefore["fingerprint"] {
+		t.Fatalf("enterprise did not sync: before=%#v after=%#v", enterpriseBefore, enterpriseAfter)
+	}
+}
+
 func TestSaveJSONListsDetectedCandidatesWithoutSaving(t *testing.T) {
 	home := t.TempDir()
 	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "annapo@example.com", "accessToken": "test-token-1"})

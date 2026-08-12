@@ -99,6 +99,10 @@ profiles get short per-agent numbers, so `claude #1` and `codex #1` can both
 exist. Choose `List` to see saved profiles with the active account marked, then
 select a profile to switch accounts.
 
+Claude profiles are scoped by both account and organization. If the same email
+belongs to Team and Enterprise workspaces, `ags save` stores each workspace under
+its own Claude profile number.
+
 Direct shell commands are available for scripting: `save`, `list`, `remove`,
 and `update`. The terminal UI `List` screen handles interactive switching.
 Usage metadata is best-effort; if a metadata source is unavailable, `ags` still
