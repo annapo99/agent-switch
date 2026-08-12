@@ -367,8 +367,7 @@ func (s *Service) SaveCandidates(agent string) []model.SaveCandidate {
 	}
 	var candidates []model.SaveCandidate
 	for _, item := range detected {
-		key := model.MetadataKey{Agent: item.account.Agent, Label: strings.ToLower(item.account.Label)}
-		metadata := mergedMetadata(item.account.Metadata, usageMetadata[key])
+		metadata := usage.MergeAccountWithUsageMetadata(item.account, usageMetadata)
 		candidate := model.SaveCandidate{
 			Agent:       item.account.Agent,
 			DisplayName: item.account.DisplayName,
@@ -654,14 +653,4 @@ func sortedKeys[T any](input map[string]T) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func mergedMetadata(values ...model.Metadata) model.Metadata {
-	merged := model.Metadata{}
-	for _, metadata := range values {
-		for key, value := range metadata {
-			merged[key] = value
-		}
-	}
-	return merged
 }

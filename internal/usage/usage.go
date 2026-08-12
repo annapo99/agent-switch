@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 )
 
@@ -114,7 +115,10 @@ func MetadataByEmailFromCswapPayload(payload map[string]any) map[model.MetadataK
 		}
 		profileMetadata := model.Metadata{}
 		if org := stringValue(account["organizationName"]); org != "" {
-			profileMetadata["organization_name"] = org
+			profileMetadata[model.MetadataOrganizationName] = org
+		}
+		if orgUUID := stringValue(account["organizationUuid"]); orgUUID != "" {
+			profileMetadata[model.MetadataOrganizationUUID] = orgUUID
 		}
 		if usageMap, ok := account["usage"].(map[string]any); ok {
 			if rows := usageLimitsFromCswapUsage(usageMap, account["usageAgeSeconds"]); len(rows) > 0 {
@@ -122,7 +126,8 @@ func MetadataByEmailFromCswapPayload(payload map[string]any) map[model.MetadataK
 			}
 		}
 		if len(profileMetadata) > 0 {
-			metadata[model.MetadataKey{Agent: "claude", Label: strings.ToLower(email)}] = profileMetadata
+			key := identity.StrongestKey("claude", email, profileMetadata)
+			metadata[key] = profileMetadata
 		}
 	}
 	return metadata
@@ -191,8 +196,18 @@ func (p ClaudeOAuthProvider) Load(home string) map[model.MetadataKey]model.Metad
 			}
 		}
 		if len(profileMetadata) > 0 {
-			metadata[model.MetadataKey{Agent: "claude", Label: label}] = profileMetadata
+			key := identity.StrongestKey("claude", label, manifestMetadata(manifest))
+			metadata[key] = profileMetadata
 		}
+	}
+	return metadata
+}
+
+func manifestMetadata(manifest map[string]any) model.Metadata {
+	raw, _ := manifest["metadata"].(map[string]any)
+	metadata := model.Metadata{}
+	for key, value := range raw {
+		metadata[key] = value
 	}
 	return metadata
 }
@@ -674,17 +689,36 @@ func EmailFromCodexAuth(auth map[string]any) string {
 }
 
 func MergeProfilesWithUsageMetadata(profiles []model.Profile, metadata map[model.MetadataKey]model.Metadata) []model.Profile {
+	labelCounts := map[model.MetadataKey]int{}
+	for _, profile := range profiles {
+		labelCounts[identity.LabelKey(profile.Agent, profile.Label)]++
+	}
+
 	merged := make([]model.Profile, 0, len(profiles))
 	for _, profile := range profiles {
 		next := profile
 		next.Metadata = cloneMetadata(profile.Metadata)
-		key := model.MetadataKey{Agent: profile.Agent, Label: strings.ToLower(profile.Label)}
-		for itemKey, value := range metadata[key] {
-			next.Metadata[itemKey] = value
+		labelKey := identity.LabelKey(profile.Agent, profile.Label)
+		if labelCounts[labelKey] == 1 {
+			mergeOneMetadata(next.Metadata, metadata[labelKey])
+		}
+		for _, key := range identity.OrganizationKeys(profile.Agent, profile.Label, profile.Metadata) {
+			mergeOneMetadata(next.Metadata, metadata[key])
 		}
 		merged = append(merged, next)
 	}
 	return merged
+}
+
+func MergeAccountWithUsageMetadata(account model.ActiveAccount, metadata map[model.MetadataKey]model.Metadata) model.Metadata {
+	profile := model.Profile{Agent: account.Agent, Label: account.Label, Metadata: account.Metadata}
+	return MergeProfilesWithUsageMetadata([]model.Profile{profile}, metadata)[0].Metadata
+}
+
+func mergeOneMetadata(target, source model.Metadata) {
+	for key, value := range source {
+		target[key] = value
+	}
 }
 
 func rowsFromRateLimit(rateLimit map[string]any, prefix string, nowEpoch int64) []any {

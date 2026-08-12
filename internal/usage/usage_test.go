@@ -58,7 +58,7 @@ func TestCswapPayloadMapsUsageWindowsByEmail(t *testing.T) {
 		},
 	})
 
-	key := model.MetadataKey{Agent: "claude", Label: "annapo.claude@example.com"}
+	key := model.MetadataKey{Agent: "claude", Label: "annapo.claude@example.com", Organization: "name:example team"}
 	got := metadata[key]
 
 	if got.String("organization_name") != "Example Team" {
@@ -97,6 +97,9 @@ func TestClaudeOAuthProviderLoadsSavedSnapshotUsageAndOAuth(t *testing.T) {
 		"display_name": "Claude",
 		"number":       1,
 		"label":        "annapo.claude@example.com",
+		"metadata": map[string]any{
+			model.MetadataOrganizationUUID: "team-org",
+		},
 	})
 	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
 		"service": "Claude Code-credentials",
@@ -134,9 +137,12 @@ func TestClaudeOAuthProviderLoadsSavedSnapshotUsageAndOAuth(t *testing.T) {
 
 	metadata := provider.Load(home)
 
-	key := model.MetadataKey{Agent: "claude", Label: "annapo.claude@example.com"}
+	key := model.MetadataKey{Agent: "claude", Label: "annapo.claude@example.com", Organization: "uuid:team-org"}
 	got := metadata[key]
-	rows := got["usage_limits"].([]any)
+	rows, ok := got["usage_limits"].([]any)
+	if !ok {
+		t.Fatalf("metadata = %#v", metadata)
+	}
 	if len(rows) != 3 {
 		t.Fatalf("rows = %#v", rows)
 	}
@@ -336,5 +342,34 @@ func TestMergeProfilesWithUsageMetadataDoesNotMutateOriginal(t *testing.T) {
 	}
 	if len(merged[1].Metadata) != 0 {
 		t.Fatalf("codex mutated = %#v", merged[1].Metadata)
+	}
+}
+
+func TestMergeProfilesWithUsageMetadataSeparatesClaudeOrganizations(t *testing.T) {
+	profiles := []model.Profile{
+		{Agent: "claude", Label: "same@example.com", Metadata: model.Metadata{
+			model.MetadataOrganizationUUID: "team-org",
+		}},
+		{Agent: "claude", Label: "same@example.com", Metadata: model.Metadata{
+			model.MetadataOrganizationUUID: "enterprise-org",
+		}},
+	}
+	metadata := map[model.MetadataKey]model.Metadata{
+		{Agent: "claude", Label: "same@example.com", Organization: "uuid:team-org"}: {
+			"oauth_status": "oauth: team",
+		},
+		{Agent: "claude", Label: "same@example.com", Organization: "uuid:enterprise-org"}: {
+			"oauth_status": "oauth: enterprise",
+		},
+		{Agent: "claude", Label: "same@example.com"}: {
+			"oauth_status": "oauth: ambiguous fallback",
+		},
+	}
+
+	merged := MergeProfilesWithUsageMetadata(profiles, metadata)
+
+	if merged[0].Metadata.String("oauth_status") != "oauth: team" ||
+		merged[1].Metadata.String("oauth_status") != "oauth: enterprise" {
+		t.Fatalf("merged = %+v", merged)
 	}
 }
