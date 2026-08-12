@@ -396,7 +396,9 @@ func claudeJSONMetadata(home string) model.Metadata {
 	oauth := claudeOAuthAccount(home)
 	metadata := model.Metadata{}
 	mapping := map[string]string{
-		"organizationName":          "organization_name",
+		"accountUuid":               model.MetadataAccountUUID,
+		"organizationUuid":          model.MetadataOrganizationUUID,
+		"organizationName":          model.MetadataOrganizationName,
 		"organizationRateLimitTier": "organization_rate_limit_tier",
 		"userRateLimitTier":         "user_rate_limit_tier",
 		"seatTier":                  "seat_tier",

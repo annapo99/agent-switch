@@ -139,6 +139,8 @@ func TestClaudeProviderIncludesClaudeJSONMetadata(t *testing.T) {
 	})
 	writeJSON(t, home, ".claude.json", map[string]any{
 		"oauthAccount": map[string]any{
+			"accountUuid":               "account-team-user",
+			"organizationUuid":          "organization-team",
 			"organizationName":          "Example Team",
 			"userRateLimitTier":         "default_claude_max_5x",
 			"organizationRateLimitTier": "default_raven",
@@ -151,6 +153,10 @@ func TestClaudeProviderIncludesClaudeJSONMetadata(t *testing.T) {
 
 	if !ok {
 		t.Fatal("expected account")
+	}
+	if account.Metadata.String(model.MetadataAccountUUID) != "account-team-user" ||
+		account.Metadata.String(model.MetadataOrganizationUUID) != "organization-team" {
+		t.Fatalf("identity metadata = %#v", account.Metadata)
 	}
 	if got := account.Metadata.String("organization_name"); got != "Example Team" {
 		t.Fatalf("organization = %q", got)

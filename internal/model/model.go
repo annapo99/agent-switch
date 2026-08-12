@@ -1,5 +1,11 @@
 package model
 
+const (
+	MetadataAccountUUID      = "account_uuid"
+	MetadataOrganizationUUID = "organization_uuid"
+	MetadataOrganizationName = "organization_name"
+)
+
 type Metadata map[string]any
 
 func (m Metadata) String(key string) string {
@@ -50,6 +56,7 @@ type SaveCandidate struct {
 }
 
 type MetadataKey struct {
-	Agent string
-	Label string
+	Agent        string
+	Label        string
+	Organization string
 }
