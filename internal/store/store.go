@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 )
 
@@ -101,8 +101,12 @@ func (s *Store) ListProfiles(agent string) []model.Profile {
 		}
 		sort.Ints(numbers)
 		for _, number := range numbers {
-			profile, err := readProfile(filepath.Join(agentDir, strconv.Itoa(number), "manifest.json"))
+			profileDir := filepath.Join(agentDir, strconv.Itoa(number))
+			profile, err := readProfile(filepath.Join(profileDir, "manifest.json"))
 			if err == nil {
+				if hydrated, hydrateErr := hydrateClaudeIdentity(profile, profileDir); hydrateErr == nil {
+					profile = hydrated
+				}
 				profiles = append(profiles, profile)
 			}
 		}
@@ -112,6 +116,14 @@ func (s *Store) ListProfiles(agent string) []model.Profile {
 
 func (s *Store) FindDuplicate(account model.ActiveAccount) (model.Profile, bool) {
 	profiles := s.ListProfiles(account.Agent)
+	if identity.HasStableClaudeIdentity(account.Agent, account.Metadata) {
+		for _, profile := range profiles {
+			if identity.SameLogicalAccount(profile, account) {
+				return profile, true
+			}
+		}
+		return model.Profile{}, false
+	}
 	if account.Fingerprint != "" {
 		for _, profile := range profiles {
 			if profile.Agent == account.Agent && profile.Fingerprint != "" && profile.Fingerprint == account.Fingerprint {
@@ -120,7 +132,7 @@ func (s *Store) FindDuplicate(account model.ActiveAccount) (model.Profile, bool)
 		}
 	}
 	for _, profile := range profiles {
-		if profileMatchesAccountByLabel(profile, account) {
+		if identity.SameLogicalAccount(profile, account) {
 			return profile, true
 		}
 	}
@@ -217,25 +229,11 @@ func profileMatchesAccount(profile model.Profile, account model.ActiveAccount) b
 	if profile.Agent != account.Agent {
 		return false
 	}
+	if identity.HasStableClaudeIdentity(account.Agent, account.Metadata) {
+		return identity.SameLogicalAccount(profile, account)
+	}
 	if profile.Fingerprint != "" && account.Fingerprint != "" && profile.Fingerprint == account.Fingerprint {
 		return true
 	}
-	return profileMatchesAccountByLabel(profile, account)
-}
-
-func profileMatchesAccountByLabel(profile model.Profile, account model.ActiveAccount) bool {
-	if profile.Agent != account.Agent {
-		return false
-	}
-	profileLabel := normalizedIdentityLabel(profile.Label)
-	accountLabel := normalizedIdentityLabel(account.Label)
-	return profileLabel != "" && profileLabel == accountLabel
-}
-
-func normalizedIdentityLabel(label string) string {
-	normalized := strings.ToLower(strings.TrimSpace(label))
-	if normalized == "" || normalized == "unknown" {
-		return ""
-	}
-	return normalized
+	return identity.SameLogicalAccount(profile, account)
 }

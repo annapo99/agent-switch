@@ -166,6 +166,47 @@ func TestClaudeProviderIncludesClaudeJSONMetadata(t *testing.T) {
 	}
 }
 
+func TestClaudeProviderMatchesOnlyCurrentOrganizationWithSharedFingerprint(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{
+			"emailAddress":     "same@example.com",
+			"accountUuid":      "account-1",
+			"organizationUuid": "enterprise-org",
+		},
+	})
+	backend := &fakeKeychain{item: &KeychainItem{
+		Account: "annapo",
+		Secret:  `{"claudeAiOauth":{"accessToken":"shared-access"}}`,
+	}}
+	p := NewClaudeProvider(backend)
+	active, ok := p.Detect(home)
+	if !ok {
+		t.Fatal("expected active account")
+	}
+	team := model.Profile{
+		Agent: "claude", Label: active.Label, Fingerprint: active.Fingerprint,
+		Metadata: model.Metadata{
+			model.MetadataAccountUUID:      "account-1",
+			model.MetadataOrganizationUUID: "team-org",
+		},
+	}
+	enterprise := model.Profile{
+		Agent: "claude", Label: active.Label, Fingerprint: active.Fingerprint,
+		Metadata: model.Metadata{
+			model.MetadataAccountUUID:      "account-1",
+			model.MetadataOrganizationUUID: "enterprise-org",
+		},
+	}
+
+	if p.MatchesProfile(home, team) {
+		t.Fatal("team profile must not match the active Enterprise organization")
+	}
+	if !p.MatchesProfile(home, enterprise) {
+		t.Fatal("enterprise profile should match")
+	}
+}
+
 func TestKeychainSnapshotAndApplyRoundTripsSecret(t *testing.T) {
 	home := t.TempDir()
 	original := `{"claudeAiOauth":{"accessToken":"original-access","refreshToken":"original-refresh"}}`

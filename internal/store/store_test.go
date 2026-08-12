@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -22,6 +23,20 @@ func active(agent, label, fingerprint string, metadata model.Metadata) model.Act
 		Source:      "fixture",
 		AuthFiles:   []string{},
 		Metadata:    metadata,
+	}
+}
+
+func writeStoreJSON(t *testing.T, path string, payload any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -113,6 +128,111 @@ func TestFindDuplicatePrefersFingerprintBeforeLabelFallback(t *testing.T) {
 
 	if !ok || profile.Number != 2 {
 		t.Fatalf("duplicate = %+v ok=%v", profile, ok)
+	}
+}
+
+func TestFindDuplicateSeparatesClaudeOrganizationsWithSameFingerprint(t *testing.T) {
+	s := New(t.TempDir())
+	team := active("claude", "same@example.com", "shared-token", model.Metadata{
+		model.MetadataAccountUUID:      "account-1",
+		model.MetadataOrganizationUUID: "team-org",
+	})
+	if _, err := s.CreateProfile(team); err != nil {
+		t.Fatal(err)
+	}
+	enterprise := active("claude", "same@example.com", "shared-token", model.Metadata{
+		model.MetadataAccountUUID:      "account-1",
+		model.MetadataOrganizationUUID: "enterprise-org",
+	})
+
+	if duplicate, ok := s.FindDuplicate(enterprise); ok {
+		t.Fatalf("unexpected duplicate = %+v", duplicate)
+	}
+}
+
+func TestFindDuplicateMatchesClaudeOrganizationAfterTokenRotation(t *testing.T) {
+	s := New(t.TempDir())
+	team := active("claude", "same@example.com", "old-token", model.Metadata{
+		model.MetadataAccountUUID:      "account-1",
+		model.MetadataOrganizationUUID: "team-org",
+	})
+	if _, err := s.CreateProfile(team); err != nil {
+		t.Fatal(err)
+	}
+	rotated := active("claude", "same@example.com", "new-token", model.Metadata{
+		model.MetadataAccountUUID:      "account-1",
+		model.MetadataOrganizationUUID: "team-org",
+	})
+
+	duplicate, ok := s.FindDuplicate(rotated)
+	if !ok || duplicate.Number != 1 {
+		t.Fatalf("duplicate = %+v ok=%v", duplicate, ok)
+	}
+}
+
+func TestListProfilesBackfillsClaudeOrganizationIdentityFromSnapshot(t *testing.T) {
+	home := t.TempDir()
+	s := New(home)
+	profile, err := s.CreateProfile(active("claude", "same@example.com", "token", model.Metadata{
+		model.MetadataOrganizationName: "Example Team",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileDir := s.ProfileDir("claude", profile.Number)
+	writeStoreJSON(t, filepath.Join(profileDir, "config.json"), map[string]any{
+		"oauthAccount": map[string]any{
+			"accountUuid":      "account-1",
+			"organizationUuid": "team-org",
+		},
+	})
+
+	loaded := s.ListProfiles("claude")
+	if len(loaded) != 1 ||
+		loaded[0].Metadata.String(model.MetadataAccountUUID) != "account-1" ||
+		loaded[0].Metadata.String(model.MetadataOrganizationUUID) != "team-org" {
+		t.Fatalf("profiles = %+v", loaded)
+	}
+	data, err := os.ReadFile(filepath.Join(profileDir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted model.Profile
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Metadata.String(model.MetadataOrganizationUUID) != "team-org" {
+		t.Fatalf("persisted = %+v", persisted)
+	}
+}
+
+func TestListProfilesLeavesManifestUntouchedForMalformedClaudeSnapshot(t *testing.T) {
+	home := t.TempDir()
+	s := New(home)
+	profile, err := s.CreateProfile(active("claude", "same@example.com", "token", model.Metadata{
+		model.MetadataOrganizationName: "Example Team",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileDir := s.ProfileDir("claude", profile.Number)
+	manifestPath := filepath.Join(profileDir, "manifest.json")
+	original, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = s.ListProfiles("claude")
+
+	after, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("manifest changed\nbefore=%s\nafter=%s", original, after)
 	}
 }
 

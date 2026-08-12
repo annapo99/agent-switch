@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 )
 
@@ -304,7 +305,7 @@ func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, d
 
 func (p *ClaudeProvider) MatchesProfile(home string, profile model.Profile) bool {
 	active, ok := p.Detect(home)
-	return ok && active.Fingerprint == profile.Fingerprint
+	return ok && identity.SameLogicalAccount(profile, active) && active.Fingerprint == profile.Fingerprint
 }
 
 func (p *ClaudeProvider) readKeychainItem(home string) *KeychainItem {
