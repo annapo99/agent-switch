@@ -31,10 +31,13 @@ type ActiveAccount struct {
 }
 
 type Profile struct {
-	Agent       string   `json:"agent"`
-	DisplayName string   `json:"display_name"`
-	Number      int      `json:"number"`
-	Label       string   `json:"label"`
+	Agent       string `json:"agent"`
+	DisplayName string `json:"display_name"`
+	Number      int    `json:"number"`
+	Label       string `json:"label"`
+	// Name is a display name chosen with `ags rename`; it replaces the label
+	// and organization in lists and survives credential updates.
+	Name        string   `json:"name,omitempty"`
 	Fingerprint string   `json:"fingerprint"`
 	Source      string   `json:"source"`
 	AuthFiles   []string `json:"auth_files"`

@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
@@ -21,6 +22,9 @@ import (
 
 const ClaudeKeychainService = "Claude Code-credentials"
 const claudeConfigSnapshotFile = "config.json"
+
+// claudeTokenLifetime is how long a `claude setup-token` token stays valid.
+const claudeTokenLifetime = 1 // years
 
 var emailRE = regexp.MustCompile(`[^@\s]+@[^@\s]+\.[^@\s]+`)
 
@@ -205,13 +209,11 @@ func (p *ClaudeProvider) DisplayName() string { return "Claude" }
 func (p *ClaudeProvider) Detect(home string) (model.ActiveAccount, bool) {
 	if item := p.readKeychainItem(home); item != nil {
 		metadata := claudeJSONMetadata(home)
-		secret := item.Secret
-		sum := sha256.Sum256([]byte("claude:" + ClaudeKeychainService + ":" + secret))
 		return model.ActiveAccount{
 			Agent:       "claude",
 			DisplayName: "Claude",
 			Label:       p.keychainLabel(home, item),
-			Fingerprint: hex.EncodeToString(sum[:]),
+			Fingerprint: claudeKeychainFingerprint(item.Secret),
 			Source:      "Keychain: " + ClaudeKeychainService,
 			AuthFiles:   []string{"keychain:" + ClaudeKeychainService},
 			Metadata:    metadata,
@@ -251,6 +253,55 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 		return err
 	}
 	return writeClaudeConfigSnapshot(home, profileDir)
+}
+
+// TokenAccount describes a long-lived token from `claude setup-token` as a
+// keychain login and returns it with the keychain secret to store. The token
+// only carries the inference scope and cannot be refreshed.
+func (p *ClaudeProvider) TokenAccount(home, label, token string, now time.Time) (model.ActiveAccount, string) {
+	secret, _ := json.Marshal(map[string]any{
+		"claudeAiOauth": map[string]any{
+			"accessToken":      token,
+			"refreshToken":     nil,
+			"expiresAt":        now.AddDate(claudeTokenLifetime, 0, 0).UnixMilli(),
+			"scopes":           []string{"user:inference"},
+			"subscriptionType": nil,
+		},
+	})
+	return model.ActiveAccount{
+		Agent:       "claude",
+		DisplayName: "Claude",
+		Label:       label,
+		Fingerprint: claudeKeychainFingerprint(string(secret)),
+		Source:      "Token: claude setup-token",
+		AuthFiles:   []string{"keychain:" + ClaudeKeychainService},
+		Metadata:    model.Metadata{},
+	}, string(secret)
+}
+
+// SaveTokenSnapshot stores secret as the profile's keychain credential and the
+// label as its only oauthAccount field, so switching to it leaves no account
+// or organization identity of the previous login behind.
+func (p *ClaudeProvider) SaveTokenSnapshot(home, label, secret, profileDir string) error {
+	account := os.Getenv("USER")
+	if item := p.readKeychainItem(home); item != nil && item.Account != "" {
+		account = item.Account
+	}
+	if err := writeJSONFile(filepath.Join(profileDir, "keychain.json"), map[string]string{
+		"service": ClaudeKeychainService,
+		"account": account,
+		"secret":  secret,
+	}); err != nil {
+		return err
+	}
+	return writeJSONFile(filepath.Join(profileDir, claudeConfigSnapshotFile), map[string]any{
+		"oauthAccount": map[string]any{"emailAddress": label},
+	})
+}
+
+func claudeKeychainFingerprint(secret string) string {
+	sum := sha256.Sum256([]byte("claude:" + ClaudeKeychainService + ":" + secret))
+	return hex.EncodeToString(sum[:])
 }
 
 func (p *ClaudeProvider) ApplySnapshot(home string, profileDir string) error {

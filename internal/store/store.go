@@ -54,11 +54,22 @@ func (s *Store) UpdateProfile(existing model.Profile, account model.ActiveAccoun
 		createdAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	profile := profileFromAccount(account, existing.Number, createdAt)
+	profile.Name = existing.Name
 	dir := s.ProfileDir(existing.Agent, existing.Number)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return model.Profile{}, err
 	}
 	if err := writeProfile(filepath.Join(dir, "manifest.json"), profile); err != nil {
+		return model.Profile{}, err
+	}
+	return profile, nil
+}
+
+func (s *Store) RenameProfile(existing model.Profile, name string) (model.Profile, error) {
+	profile := existing
+	profile.Active = false
+	profile.Name = name
+	if err := writeProfileAtomic(filepath.Join(s.ProfileDir(existing.Agent, existing.Number), "manifest.json"), profile); err != nil {
 		return model.Profile{}, err
 	}
 	return profile, nil

@@ -50,7 +50,9 @@ func AgentHeading(name string, color bool) string {
 
 func ProfileTree(profile model.Profile, active bool, color bool) []string {
 	head := fmt.Sprintf("  %d: %s", profile.Number, profile.Label)
-	if org := profile.Metadata.String("organization_name"); org != "" {
+	if profile.Name != "" {
+		head = fmt.Sprintf("  %d: %s", profile.Number, profile.Name)
+	} else if org := profile.Metadata.String("organization_name"); org != "" {
 		head += " [" + org + "]"
 	}
 	if active {

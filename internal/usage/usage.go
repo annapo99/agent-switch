@@ -1,12 +1,14 @@
 package usage
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -27,6 +29,13 @@ const ClaudeOAuthTokenURL = "https://platform.claude.com/v1/oauth/token"
 const ClaudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 const claudeKeychainService = "Claude Code-credentials"
 const oauthExpiryBufferSeconds = 5 * 60
+const claudeUsageCacheFile = "usage.json"
+const ClaudeMessagesURL = "https://api.anthropic.com/v1/messages"
+const claudeProbeModel = "claude-haiku-5-5"
+
+// claudeProbeIntervalSeconds limits how often a token profile spends a
+// one-token request on reading its usage.
+const claudeProbeIntervalSeconds = 5 * 60
 
 var errInvalidGrant = errors.New("invalid_grant")
 
@@ -154,7 +163,10 @@ func TokenStatusByEmailFromCswapText(text string) map[model.MetadataKey]model.Me
 }
 
 type ClaudeOAuthProvider struct {
-	Fetcher               func(accessToken string) (map[string]any, error)
+	Fetcher func(accessToken string) (map[string]any, error)
+	// Prober reads usage for tokens from `claude setup-token`, which the usage
+	// endpoint does not serve, from the rate limit headers of a model request.
+	Prober                func(accessToken string) (map[string]any, error)
 	TokenRefresher        func(credentials string) (string, error)
 	RestrictToCurrentHome bool
 	NowEpoch              int64
@@ -185,14 +197,8 @@ func (p ClaudeOAuthProvider) Load(home string) map[model.MetadataKey]model.Metad
 			profileMetadata["oauth_status"] = status
 		}
 		if !invalidRefresh {
-			oauth := claudeOAuthData(credentials)
-			if token := stringValue(oauth["accessToken"]); token != "" {
-				payload, err := p.fetch(token)
-				if err == nil {
-					if rows := UsageRowsFromClaudePayload(payload, p.NowEpoch); len(rows) > 0 {
-						profileMetadata["usage_limits"] = rows
-					}
-				}
+			if rows := p.usageRows(home, profileDir, manifest, credentials); len(rows) > 0 {
+				profileMetadata["usage_limits"] = rows
 			}
 		}
 		if len(profileMetadata) > 0 {
@@ -201,6 +207,123 @@ func (p ClaudeOAuthProvider) Load(home string) map[model.MetadataKey]model.Metad
 		}
 	}
 	return metadata
+}
+
+// usageRows fetches the profile's usage. The usage endpoint answers about once
+// a minute per account and Claude Code polls it too, so when a fetch fails the
+// last known usage is shown with its age: this profile's own copy, or the copy
+// Claude Code keeps for the same account if that one is newer.
+func (p ClaudeOAuthProvider) usageRows(home, profileDir string, manifest map[string]any, credentials string) []any {
+	now := p.NowEpoch
+	if now == 0 {
+		now = time.Now().Unix()
+	}
+	oauth := claudeOAuthData(credentials)
+	if token := stringValue(oauth["accessToken"]); token != "" {
+		read := p.fetch
+		if inferenceOnly(oauth) {
+			read = p.probe
+			if _, fetchedAt := lastClaudeUsage(home, profileDir, ""); now-fetchedAt < claudeProbeIntervalSeconds {
+				read = nil
+			}
+		}
+		if read != nil {
+			if payload, err := read(token); err == nil {
+				_ = writeJSONFile(filepath.Join(profileDir, claudeUsageCacheFile), map[string]any{"fetched_at": now, "usage": payload})
+				return UsageRowsFromClaudePayload(payload, p.NowEpoch)
+			}
+		}
+	}
+	payload, fetchedAt := lastClaudeUsage(home, profileDir, manifestMetadata(manifest).String(model.MetadataAccountUUID))
+	if payload == nil {
+		return nil
+	}
+	rows := UsageRowsFromClaudePayload(payload, p.NowEpoch)
+	if age := ageNote(now - fetchedAt); len(rows) > 0 && age != "" {
+		rows[len(rows)-1].(map[string]any)["age"] = age
+	}
+	return rows
+}
+
+// inferenceOnly reports a token from `claude setup-token`: it can call the
+// model but not the usage endpoint.
+func inferenceOnly(oauth map[string]any) bool {
+	scopes, ok := oauth["scopes"].([]any)
+	if !ok {
+		return false
+	}
+	for _, scope := range scopes {
+		if scope == "user:profile" {
+			return false
+		}
+	}
+	return true
+}
+
+func (p ClaudeOAuthProvider) probe(accessToken string) (map[string]any, error) {
+	if p.Prober != nil {
+		return p.Prober(accessToken)
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model":      claudeProbeModel,
+		"max_tokens": 1,
+		"system":     "You are Claude Code, Anthropic's official CLI for Claude.",
+		"messages":   []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	request, err := http.NewRequest(http.MethodPost, ClaudeMessagesURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	request.Header.Set("anthropic-beta", ClaudeOAuthBetaHeader)
+	request.Header.Set("anthropic-version", "2023-06-01")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", "agent-switch")
+	client := http.Client{Timeout: 15 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+	payload := usagePayloadFromRateLimitHeaders(response.Header)
+	if len(payload) == 0 {
+		return nil, errHTTPStatus(response.StatusCode)
+	}
+	return payload, nil
+}
+
+// usagePayloadFromRateLimitHeaders turns the unified rate limit headers of a
+// model response into the usage endpoint's five_hour/seven_day shape.
+func usagePayloadFromRateLimitHeaders(header http.Header) map[string]any {
+	payload := map[string]any{}
+	for _, window := range []struct{ prefix, key string }{{"5h", "five_hour"}, {"7d", "seven_day"}} {
+		utilization, err := strconv.ParseFloat(header.Get("anthropic-ratelimit-unified-"+window.prefix+"-utilization"), 64)
+		if err != nil {
+			continue
+		}
+		entry := map[string]any{"utilization": math.Round(utilization*1000) / 10}
+		if reset, err := strconv.ParseInt(header.Get("anthropic-ratelimit-unified-"+window.prefix+"-reset"), 10, 64); err == nil {
+			entry["resets_at"] = time.Unix(reset, 0).UTC().Format(time.RFC3339)
+		}
+		payload[window.key] = entry
+	}
+	return payload
+}
+
+func lastClaudeUsage(home, profileDir, accountUUID string) (map[string]any, int64) {
+	own := readJSON(filepath.Join(profileDir, claudeUsageCacheFile))
+	payload, _ := own["usage"].(map[string]any)
+	fetchedAt, _ := numberValue(own["fetched_at"])
+	if accountUUID != "" {
+		cached, _ := readJSON(filepath.Join(home, ".claude.json"))["cachedUsageUtilization"].(map[string]any)
+		usage, ok := cached["utilization"].(map[string]any)
+		fetchedAtMs, hasTime := numberValue(cached["fetchedAtMs"])
+		if ok && hasTime && fetchedAtMs/1000 > fetchedAt && strings.EqualFold(stringValue(cached["accountUuid"]), accountUUID) {
+			payload, fetchedAt = usage, fetchedAtMs/1000
+		}
+	}
+	return payload, int64(fetchedAt)
 }
 
 func manifestMetadata(manifest map[string]any) model.Metadata {

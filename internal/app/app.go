@@ -6,10 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/annapo99/agent-switch/internal/claudebg"
+	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 	"github.com/annapo99/agent-switch/internal/provider"
 	"github.com/annapo99/agent-switch/internal/render"
@@ -24,6 +29,10 @@ type Service struct {
 	providers     []provider.Provider
 	usageProvider usage.Provider
 	store         *store.Store
+	// claudeBackground moves Claude Code background sessions onto the
+	// account that was just switched in. Nil for any home other than the
+	// current user's, so tests never restart the real daemon.
+	claudeBackground func() (claudebg.Result, error)
 }
 
 var shouldColor = func(stdout any) bool {
@@ -63,13 +72,24 @@ func NewWithUsageProvider(home string, usageProvider usage.Provider) *Service {
 }
 
 func NewWithUsageProviderAndVersion(home string, usageProvider usage.Provider, version string) *Service {
-	return &Service{
+	service := &Service{
 		home:          home,
 		version:       version,
 		providers:     provider.DefaultProviders(),
 		usageProvider: usageProvider,
 		store:         store.New(home),
 	}
+	if isCurrentUserHome(home) {
+		service.claudeBackground = func() (claudebg.Result, error) {
+			return claudebg.Follow(claudebg.CLI)
+		}
+	}
+	return service
+}
+
+func isCurrentUserHome(home string) bool {
+	current, err := os.UserHomeDir()
+	return err == nil && filepath.Clean(home) == filepath.Clean(current)
 }
 
 func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -80,6 +100,13 @@ func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	command := args[0]
 	switch command {
 	case "save":
+		if hasArg(args[1:], "--token") {
+			label, ok := parseTokenOptions(args[1:], stderr)
+			if !ok {
+				return 2
+			}
+			return s.SaveToken(stdout, stderr, stdin, label)
+		}
 		opts, ok := parseOptions(args[1:], true, stdout, stderr)
 		if !ok {
 			return 2
@@ -121,6 +148,20 @@ func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			return 2
 		}
 		return s.Remove(number, stdout, stdin, opts.agent, opts.yes)
+	case "rename":
+		number, rest, ok := parseNumber(args[1:], stderr)
+		if !ok {
+			return 2
+		}
+		if len(rest) == 0 || strings.TrimSpace(rest[0]) == "" || strings.HasPrefix(rest[0], "-") {
+			fmt.Fprintln(stderr, "missing name")
+			return 2
+		}
+		opts, ok := parseOptions(rest[1:], false, stdout, stderr)
+		if !ok {
+			return 2
+		}
+		return s.Rename(number, strings.TrimSpace(rest[0]), stdout, stdin, opts.agent, opts.yes)
 	case "update":
 		return runUpdater(s.home, s.version, stdout, stderr)
 	default:
@@ -262,6 +303,62 @@ func (s *Service) Save(stdout io.Writer, stdin io.Reader, agent string, yes bool
 	return 0
 }
 
+// SaveToken saves a long-lived Claude token from `claude setup-token`, read
+// from stdin, as a Claude profile named label. Saving the same label again
+// replaces that profile's token.
+func (s *Service) SaveToken(stdout, stderr io.Writer, stdin io.Reader, label string) int {
+	line, _ := bufio.NewReader(stdin).ReadString('\n')
+	token := strings.TrimSpace(line)
+	if token == "" || strings.ContainsAny(token, " \t") {
+		fmt.Fprintln(stderr, "Pass the token printed by `claude setup-token` on stdin.")
+		return 2
+	}
+	claude, ok := s.providerByAgent("claude").(*provider.ClaudeProvider)
+	if !ok {
+		fmt.Fprintln(stderr, "Claude is not supported here.")
+		return 1
+	}
+	account, secret := claude.TokenAccount(s.home, label, token, time.Now())
+	verb := "Saved"
+	var profile model.Profile
+	var err error
+	if existing, found := s.tokenProfile(account); found {
+		verb = "Updated"
+		profile, err = s.store.UpdateProfile(existing, account)
+	} else {
+		profile, err = s.store.CreateProfile(account)
+	}
+	if err == nil {
+		err = claude.SaveTokenSnapshot(s.home, label, secret, s.store.ProfileDir(profile.Agent, profile.Number))
+	}
+	if err != nil {
+		fmt.Fprintln(stdout, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s claude account #%d (token: %s)\n", verb, profile.Number, label)
+	return 0
+}
+
+// tokenProfile finds a saved profile with the token's label and no
+// organization identity, which only another token profile can have.
+func (s *Service) tokenProfile(account model.ActiveAccount) (model.Profile, bool) {
+	for _, profile := range s.store.ListProfiles(account.Agent) {
+		if identity.SameLogicalAccount(profile, account) {
+			return profile, true
+		}
+	}
+	return model.Profile{}, false
+}
+
+func (s *Service) providerByAgent(agent string) provider.Provider {
+	for _, item := range s.providers {
+		if item.Agent() == agent {
+			return item
+		}
+	}
+	return nil
+}
+
 func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent string, yes bool) int {
 	matches := s.store.ProfilesByNumber(number, agent)
 	if len(matches) == 0 {
@@ -272,7 +369,7 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 	if !ok {
 		return 1
 	}
-	provider := provider.ProviderByAgent(profile.Agent)
+	provider := s.providerByAgent(profile.Agent)
 	if provider == nil {
 		fmt.Fprintf(stdout, "Unsupported agent: %s\n", profile.Agent)
 		return 1
@@ -287,10 +384,39 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 	}
 	if profile.Agent == "claude" {
 		fmt.Fprintf(stdout, "Switched %s to account #%d. Running sessions may take up to ~30s to pick it up.\n", name, profile.Number)
+		s.moveClaudeBackground(stdout)
 		return 0
 	}
 	fmt.Fprintf(stdout, "Switched %s to account #%d\n", name, profile.Number)
 	return 0
+}
+
+func (s *Service) moveClaudeBackground(stdout io.Writer) {
+	if s.claudeBackground == nil {
+		return
+	}
+	result, err := s.claudeBackground()
+	if err != nil {
+		fmt.Fprintf(stdout, "Background sessions were not moved: %v\n", err)
+		return
+	}
+	if count := len(result.Moved); count > 0 {
+		fmt.Fprintf(stdout, "Moved %d background %s to this account.\n", count, plural(count, "session", "sessions"))
+	}
+	if count := len(result.Busy); count > 0 {
+		fmt.Fprintf(stdout, "Left %d busy background %s on the previous account. Switch again once %s idle to move %s.\n",
+			count, plural(count, "session", "sessions"), plural(count, "it is", "they are"), plural(count, "it", "them"))
+	}
+	if len(result.Failed) > 0 {
+		fmt.Fprintf(stdout, "Could not move background sessions: %s\n", strings.Join(result.Failed, ", "))
+	}
+}
+
+func plural(count int, one, many string) string {
+	if count == 1 {
+		return one
+	}
+	return many
 }
 
 func (s *Service) List(stdout io.Writer, agent string, jsonOutput bool) int {
@@ -350,6 +476,24 @@ func (s *Service) Remove(number int, stdout io.Writer, stdin io.Reader, agent st
 		return 1
 	}
 	fmt.Fprintf(stdout, "Removed %s account #%d\n", profile.Agent, profile.Number)
+	return 0
+}
+
+func (s *Service) Rename(number int, name string, stdout io.Writer, stdin io.Reader, agent string, yes bool) int {
+	matches := s.store.ProfilesByNumber(number, agent)
+	if len(matches) == 0 {
+		fmt.Fprintf(stdout, "No saved account matches #%d.\n", number)
+		return 1
+	}
+	profile, ok := s.resolveProfile(matches, stdout, stdin, "Which account should be renamed? ", yes)
+	if !ok {
+		return 1
+	}
+	if _, err := s.store.RenameProfile(profile, name); err != nil {
+		fmt.Fprintln(stdout, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Renamed %s account #%d to %s\n", profile.Agent, profile.Number, name)
 	return 0
 }
 
@@ -517,6 +661,45 @@ func parseNumber(args []string, stderr io.Writer) (int, []string, bool) {
 	return number, args[1:], true
 }
 
+func hasArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func parseTokenOptions(args []string, stderr io.Writer) (string, bool) {
+	label := ""
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--token":
+		case "--label":
+			if index+1 >= len(args) {
+				fmt.Fprintln(stderr, "--label requires a value")
+				return "", false
+			}
+			index++
+			label = strings.TrimSpace(args[index])
+		case "--agent":
+			if index+1 >= len(args) || args[index+1] != "claude" {
+				fmt.Fprintln(stderr, "--token saves Claude accounts only")
+				return "", false
+			}
+			index++
+		default:
+			fmt.Fprintf(stderr, "unknown option: %s\n", args[index])
+			return "", false
+		}
+	}
+	if label == "" {
+		fmt.Fprintln(stderr, "--token requires --label NAME")
+		return "", false
+	}
+	return label, true
+}
+
 func parseOptions(args []string, allowJSON bool, stdout, stderr io.Writer) (options, bool) {
 	opts := options{}
 	for index := 0; index < len(args); index++ {
@@ -631,8 +814,11 @@ func printHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "positional arguments:")
 	fmt.Fprintln(stdout, "  {save,list,remove,update}")
 	fmt.Fprintln(stdout, "    save                save the current active account")
+	fmt.Fprintln(stdout, "    save --token --label NAME")
+	fmt.Fprintln(stdout, "                        save a Claude token from `claude setup-token` read on stdin")
 	fmt.Fprintln(stdout, "    list                show saved accounts and active status")
 	fmt.Fprintln(stdout, "    remove              remove a saved account number")
+	fmt.Fprintln(stdout, "    rename N NAME       show a saved account as NAME")
 	fmt.Fprintln(stdout, "    update              update ags to the latest release")
 }
 

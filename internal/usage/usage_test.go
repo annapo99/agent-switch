@@ -3,6 +3,7 @@ package usage
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -371,5 +372,142 @@ func TestMergeProfilesWithUsageMetadataSeparatesClaudeOrganizations(t *testing.T
 	if merged[0].Metadata.String("oauth_status") != "oauth: team" ||
 		merged[1].Metadata.String("oauth_status") != "oauth: enterprise" {
 		t.Fatalf("merged = %+v", merged)
+	}
+}
+
+func writeUsageProfile(t *testing.T, home, number, label, accountUUID string) {
+	t.Helper()
+	writeJSON(t, home, ".agent-switch/profiles/claude/"+number+"/manifest.json", map[string]any{
+		"agent": "claude", "number": number, "label": label,
+		"metadata": map[string]any{model.MetadataAccountUUID: accountUUID, model.MetadataOrganizationUUID: "team-org"},
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/"+number+"/keychain.json", map[string]any{
+		"service": "Claude Code-credentials",
+		"secret":  `{"claudeAiOauth":{"accessToken":"access-` + number + `","refreshToken":"refresh","expiresAt":1783504032000}}`,
+	})
+}
+
+func usagePayload(fiveHour float64) map[string]any {
+	return map[string]any{
+		"five_hour": map[string]any{"utilization": fiveHour, "resets_at": "2026-07-08T09:47:12Z"},
+		"seven_day": map[string]any{"utilization": float64(27), "resets_at": "2026-07-12T17:59:00Z"},
+	}
+}
+
+func usageRows(t *testing.T, metadata map[model.MetadataKey]model.Metadata, label string) []any {
+	t.Helper()
+	rows, _ := metadata[model.MetadataKey{Agent: "claude", Label: label, Organization: "uuid:team-org"}]["usage_limits"].([]any)
+	return rows
+}
+
+func TestClaudeOAuthProviderShowsLastUsageWhenFetchIsRateLimited(t *testing.T) {
+	useSeoulTime(t)
+	home := t.TempDir()
+	writeUsageProfile(t, home, "1", "annapo@example.com", "account-annapo")
+	fresh := ClaudeOAuthProvider{NowEpoch: 1783486262, Fetcher: func(string) (map[string]any, error) { return usagePayload(48), nil }}
+	fresh.Load(home)
+
+	limited := ClaudeOAuthProvider{NowEpoch: 1783486262 + 600, Fetcher: func(string) (map[string]any, error) { return nil, errHTTPStatus(429) }}
+	rows := usageRows(t, limited.Load(home), "annapo@example.com")
+
+	if len(rows) != 2 || rows[0].(map[string]any)["used_percentage"] != float64(48) || rows[1].(map[string]any)["age"] != "10m ago" {
+		t.Fatalf("rows = %#v", rows)
+	}
+}
+
+func TestClaudeOAuthProviderUsesClaudeCodeUsageCacheForTheSameAccount(t *testing.T) {
+	useSeoulTime(t)
+	home := t.TempDir()
+	writeUsageProfile(t, home, "1", "annapo@example.com", "account-annapo")
+	writeUsageProfile(t, home, "2", "other@example.com", "account-other")
+	writeJSON(t, home, ".claude.json", map[string]any{"cachedUsageUtilization": map[string]any{
+		"accountUuid": "account-annapo",
+		"fetchedAtMs": (1783486262 - 300) * 1000,
+		"utilization": usagePayload(7),
+	}})
+	limited := ClaudeOAuthProvider{NowEpoch: 1783486262, Fetcher: func(string) (map[string]any, error) { return nil, errHTTPStatus(429) }}
+
+	metadata := limited.Load(home)
+
+	rows := usageRows(t, metadata, "annapo@example.com")
+	if len(rows) != 2 || rows[0].(map[string]any)["used_percentage"] != float64(7) || rows[1].(map[string]any)["age"] != "5m ago" {
+		t.Fatalf("annapo rows = %#v", rows)
+	}
+	if other := usageRows(t, metadata, "other@example.com"); len(other) != 0 {
+		t.Fatalf("other account got annapo usage: %#v", other)
+	}
+}
+
+func writeTokenUsageProfile(t *testing.T, home string) {
+	t.Helper()
+	writeJSON(t, home, ".agent-switch/profiles/claude/2/manifest.json", map[string]any{"agent": "claude", "number": 2, "label": "bot"})
+	writeJSON(t, home, ".agent-switch/profiles/claude/2/keychain.json", map[string]any{
+		"service": "Claude Code-credentials",
+		"secret":  `{"claudeAiOauth":{"accessToken":"bot-token","refreshToken":null,"expiresAt":1815022262000,"scopes":["user:inference"]}}`,
+	})
+}
+
+func tokenRows(metadata map[model.MetadataKey]model.Metadata) []any {
+	rows, _ := metadata[model.MetadataKey{Agent: "claude", Label: "bot"}]["usage_limits"].([]any)
+	return rows
+}
+
+func TestClaudeOAuthProviderReadsTokenProfileUsageFromRateLimitHeaders(t *testing.T) {
+	useSeoulTime(t)
+	home := t.TempDir()
+	writeTokenUsageProfile(t, home)
+	probed := 0
+	provider := ClaudeOAuthProvider{
+		NowEpoch: 1783486262,
+		Fetcher: func(string) (map[string]any, error) {
+			t.Fatal("usage endpoint called for a token profile")
+			return nil, nil
+		},
+		Prober: func(token string) (map[string]any, error) {
+			probed++
+			if token != "bot-token" {
+				t.Fatalf("token = %q", token)
+			}
+			return usagePayload(45), nil
+		},
+	}
+
+	rows := tokenRows(provider.Load(home))
+	rows = append(rows, tokenRows(ClaudeOAuthProvider{NowEpoch: 1783486262 + 120, Prober: provider.Prober}.Load(home))...)
+
+	if probed != 1 || len(rows) != 4 || rows[0].(map[string]any)["used_percentage"] != float64(45) || rows[3].(map[string]any)["age"] != "2m ago" {
+		t.Fatalf("probed=%d rows=%#v", probed, rows)
+	}
+}
+
+func TestClaudeOAuthProviderProbesTokenProfileAgainAfterFiveMinutes(t *testing.T) {
+	useSeoulTime(t)
+	home := t.TempDir()
+	writeTokenUsageProfile(t, home)
+	ClaudeOAuthProvider{NowEpoch: 1783486262, Prober: func(string) (map[string]any, error) { return usagePayload(45), nil }}.Load(home)
+
+	rows := tokenRows(ClaudeOAuthProvider{NowEpoch: 1783486262 + 301, Prober: func(string) (map[string]any, error) { return usagePayload(50), nil }}.Load(home))
+
+	if len(rows) != 2 || rows[0].(map[string]any)["used_percentage"] != float64(50) {
+		t.Fatalf("rows = %#v", rows)
+	}
+}
+
+func TestUsagePayloadFromRateLimitHeaders(t *testing.T) {
+	header := http.Header{}
+	header.Set("anthropic-ratelimit-unified-5h-utilization", "0.45")
+	header.Set("anthropic-ratelimit-unified-5h-reset", "1783490862")
+	header.Set("anthropic-ratelimit-unified-7d-utilization", "0.48")
+	header.Set("anthropic-ratelimit-unified-7d-reset", "1783879140")
+
+	payload := usagePayloadFromRateLimitHeaders(header)
+
+	fiveHour := payload["five_hour"].(map[string]any)
+	sevenDay := payload["seven_day"].(map[string]any)
+	if fiveHour["utilization"] != float64(45) || fiveHour["resets_at"] != "2026-07-08T06:07:42Z" || sevenDay["utilization"] != float64(48) {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if empty := usagePayloadFromRateLimitHeaders(http.Header{}); len(empty) != 0 {
+		t.Fatalf("payload without headers = %#v", empty)
 	}
 }

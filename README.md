@@ -104,9 +104,42 @@ belongs to Team and Enterprise workspaces, `ags save` stores each workspace unde
 its own Claude profile number.
 
 Direct shell commands are available for scripting: `save`, `list`, `remove`,
-and `update`. The terminal UI `List` screen handles interactive switching.
+`rename`, and `update`. The terminal UI `List` screen handles interactive
+switching. `ags rename 1 work` shows profile #1 as `work` instead of its email
+and organization; the name stays when the saved credentials are refreshed.
+
+### Claude tokens
+
+A long-lived token from `claude setup-token` can be saved as a Claude profile
+without logging in through the browser. Pass the token on stdin and name the
+profile:
+
+```bash
+security find-generic-password -s claude-token-bot -w | ags save --token --label bot
+```
+
+Switching to it stores the token as the Claude Keychain login, so every
+`claude` command uses it without `CLAUDE_CODE_OAUTH_TOKEN`. Saving the same
+label again replaces the token. A token only has the inference scope: it
+cannot be refreshed and does not load claude.ai connectors, and MCP servers
+that use OAuth need to be connected again on this profile. The usage endpoint
+does not serve tokens, so `ags` reads a token profile's 5h and 7d usage from
+the rate limit headers of a one-token Haiku request, at most every five
+minutes; that request counts toward the account's usage.
+
+### Claude background sessions
+
+Claude Code background sessions (`claude --bg`, `claude agents`) run under a
+daemon that keeps the account it started with. After switching Claude
+accounts, `ags` restarts that daemon without stopping its sessions and
+respawns the idle background sessions so they continue on the new account.
+Sessions that are busy at that moment keep running on the previous account;
+switch again once they are idle to move them.
 Usage metadata is best-effort; if a metadata source is unavailable, `ags` still
-lists and switches saved accounts.
+lists and switches saved accounts. Claude's usage endpoint answers about once a
+minute per account, so when it refuses, `ags` shows the last usage it saw for
+that account (or the newer copy Claude Code keeps for it) marked with its age,
+such as `10m ago`.
 
 ## Supported Agents
 

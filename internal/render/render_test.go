@@ -151,3 +151,19 @@ func TestShouldColorHonorsNoColorForAutomaticColor(t *testing.T) {
 		t.Fatal("expected NO_COLOR to disable color")
 	}
 }
+
+func TestProfileTreeShowsChosenNameInsteadOfEmailAndOrganization(t *testing.T) {
+	profile := model.Profile{
+		Agent:    "claude",
+		Number:   4,
+		Label:    "person@example.com",
+		Name:     "annapo",
+		Metadata: model.Metadata{"organization_name": "Example Team"},
+	}
+
+	lines := ProfileTree(profile, true, false)
+
+	if lines[0] != "  4: annapo (active)" {
+		t.Fatalf("head = %q", lines[0])
+	}
+}

@@ -499,3 +499,65 @@ func TestFileSnapshotAndApplyRoundTripsAuthFile(t *testing.T) {
 var _ Provider = NewCodexProvider()
 var _ Provider = NewClaudeProvider(&fakeKeychain{})
 var _ = model.ActiveAccount{}
+
+func TestClaudeTokenProfileAppliesAsKeychainLoginWithOnlyItsLabel(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"projects": map[string]any{"keep": true},
+		"oauthAccount": map[string]any{
+			"emailAddress":     "annapo@example.com",
+			"accountUuid":      "account-annapo",
+			"organizationUuid": "org-team",
+			"organizationName": "Team",
+		},
+	})
+	backend := &fakeKeychain{item: &KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"annapo-access","refreshToken":"annapo-refresh"}}`}}
+	p := NewClaudeProvider(backend)
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	account, secret := p.TokenAccount(home, "bot", "sk-ant-oat01-test", now)
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/2")
+
+	if err := p.SaveTokenSnapshot(home, "bot", secret, profileDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ApplySnapshot(home, profileDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if backend.item.Account != "annapo" {
+		t.Fatalf("keychain account = %q", backend.item.Account)
+	}
+	var stored map[string]map[string]any
+	if err := json.Unmarshal([]byte(backend.item.Secret), &stored); err != nil {
+		t.Fatal(err)
+	}
+	oauth := stored["claudeAiOauth"]
+	refresh, hasRefresh := oauth["refreshToken"]
+	if oauth["accessToken"] != "sk-ant-oat01-test" || !hasRefresh || refresh != nil ||
+		oauth["expiresAt"] != float64(now.AddDate(1, 0, 0).UnixMilli()) ||
+		strings.Join(toStrings(oauth["scopes"]), ",") != "user:inference" {
+		t.Fatalf("keychain secret = %#v", oauth)
+	}
+	config := readJSONFile(t, home, ".claude.json")
+	if got := config["oauthAccount"].(map[string]any); len(got) != 1 || got["emailAddress"] != "bot" {
+		t.Fatalf("oauthAccount = %#v", got)
+	}
+	if config["projects"].(map[string]any)["keep"] != true {
+		t.Fatalf("config lost unrelated keys: %#v", config)
+	}
+	detected, ok := p.Detect(home)
+	if !ok || detected.Label != "bot" || detected.Fingerprint != account.Fingerprint ||
+		detected.Metadata.String(model.MetadataAccountUUID) != "" || detected.Metadata.String(model.MetadataOrganizationUUID) != "" {
+		t.Fatalf("detected = %#v, token account = %#v", detected, account)
+	}
+}
+
+func toStrings(value any) []string {
+	items, _ := value.([]any)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		text, _ := item.(string)
+		out = append(out, text)
+	}
+	return out
+}
