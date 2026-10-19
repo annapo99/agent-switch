@@ -132,9 +132,13 @@ minutes; that request counts toward the account's usage.
 Claude Code background sessions (`claude --bg`, `claude agents`) run under a
 daemon that keeps the account it started with. After switching Claude
 accounts, `ags` restarts that daemon without stopping its sessions and
-respawns the idle background sessions so they continue on the new account.
-Sessions that are busy at that moment keep running on the previous account;
-switch again once they are idle to move them.
+respawns every background session so it continues on the new account at once.
+A session that is busy at that moment is restarted mid-task: its in-progress
+reply or tool call is cut off, and shell commands it left running in the
+background keep running without it. Send it a message to pick up where it
+stopped. When `ags` runs inside a background session, that session is
+restarted last, a couple of seconds after `ags` exits.
+
 Usage metadata is best-effort; if a metadata source is unavailable, `ags` still
 lists and switches saved accounts. Claude's usage endpoint answers about once a
 minute per account, so when it refuses, `ags` shows the last usage it saw for

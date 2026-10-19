@@ -26,7 +26,7 @@ func (f *fakeCLI) run(args ...string) ([]byte, error) {
 	return nil, nil
 }
 
-func TestFollowRestartsDaemonThenRespawnsIdleBackgroundSessions(t *testing.T) {
+func TestFollowRestartsDaemonThenRespawnsEveryBackgroundSession(t *testing.T) {
 	cli := &fakeCLI{sessions: `[
 		{"id":"a1","kind":"background","status":"idle"},
 		{"id":"b2","kind":"background","status":"busy"},
@@ -34,16 +34,36 @@ func TestFollowRestartsDaemonThenRespawnsIdleBackgroundSessions(t *testing.T) {
 		{"id":"d4","kind":"background","status":"idle"}
 	]`}
 
-	result, err := Follow(cli.run)
+	result, err := Follow(cli.run, "")
 
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := []string{"agents --json", "daemon stop --any --keep-workers", "respawn a1", "respawn d4"}
+	wantCalls := []string{"agents --json", "daemon stop --any --keep-workers", "respawn a1", "respawn b2", "respawn d4"}
 	if !reflect.DeepEqual(cli.calls, wantCalls) {
 		t.Fatalf("calls = %#v", cli.calls)
 	}
-	if !reflect.DeepEqual(result.Moved, []string{"a1", "d4"}) || !reflect.DeepEqual(result.Busy, []string{"b2"}) || len(result.Failed) != 0 {
+	if !reflect.DeepEqual(result.Moved, []string{"a1", "d4"}) || !reflect.DeepEqual(result.Interrupted, []string{"b2"}) || len(result.Failed) != 0 || result.Self != "" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestFollowLeavesItsOwnSessionForLast(t *testing.T) {
+	cli := &fakeCLI{sessions: `[
+		{"id":"a1","sessionId":"a1-full","kind":"background","status":"busy"},
+		{"id":"e5","sessionId":"e5-full","kind":"background","status":"busy"}
+	]`}
+
+	result, err := Follow(cli.run, "e5-full")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalls := []string{"agents --json", "daemon stop --any --keep-workers", "respawn a1"}
+	if !reflect.DeepEqual(cli.calls, wantCalls) {
+		t.Fatalf("calls = %#v", cli.calls)
+	}
+	if result.Self != "e5" || !reflect.DeepEqual(result.Interrupted, []string{"a1"}) {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -54,7 +74,7 @@ func TestFollowReportsSessionsThatFailToRespawn(t *testing.T) {
 		{"id":"d4","kind":"background","status":"idle"}
 	]`}
 
-	result, err := Follow(cli.run)
+	result, err := Follow(cli.run, "")
 
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +87,7 @@ func TestFollowReportsSessionsThatFailToRespawn(t *testing.T) {
 func TestFollowLeavesDaemonAloneWhenSessionsCannotBeListed(t *testing.T) {
 	cli := &fakeCLI{listErr: errors.New("claude not found")}
 
-	if _, err := Follow(cli.run); err == nil {
+	if _, err := Follow(cli.run, ""); err == nil {
 		t.Fatal("expected error")
 	}
 	if !reflect.DeepEqual(cli.calls, []string{"agents --json"}) {

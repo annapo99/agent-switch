@@ -566,7 +566,7 @@ func TestUseClaudeMovesBackgroundSessionsToSwitchedAccount(t *testing.T) {
 	calls := 0
 	service.claudeBackground = func() (claudebg.Result, error) {
 		calls++
-		return claudebg.Result{Moved: []string{"a1", "d4"}, Busy: []string{"b2"}, Failed: []string{"e5"}}, nil
+		return claudebg.Result{Moved: []string{"a1", "d4"}, Interrupted: []string{"b2"}, Failed: []string{"e5"}}, nil
 	}
 	var stdout, stderr bytes.Buffer
 
@@ -576,9 +576,33 @@ func TestUseClaudeMovesBackgroundSessionsToSwitchedAccount(t *testing.T) {
 	if code != 0 || calls != 1 ||
 		!strings.Contains(out, "Switched Claude to account #1.") ||
 		!strings.Contains(out, "Moved 2 background sessions to this account.") ||
-		!strings.Contains(out, "Left 1 busy background session on the previous account. Switch again once it is idle to move it.") ||
-		!strings.Contains(out, "Could not move background sessions: e5") {
+		!strings.Contains(out, "Restarted 1 busy background session on this account; in-progress work was cut off.") ||
+		!strings.Contains(out, "Could not move background sessions: e5") ||
+		strings.Contains(out, "This session restarts") {
 		t.Fatalf("code=%d calls=%d out=\n%s", code, calls, out)
+	}
+}
+
+func TestUseClaudeRestartsItsOwnSessionAfterTheRest(t *testing.T) {
+	home := t.TempDir()
+	saveTwoClaudeFileAccounts(t, home)
+	service := New(home)
+	service.claudeBackground = func() (claudebg.Result, error) {
+		return claudebg.Result{Moved: []string{"a1"}, Self: "e5"}, nil
+	}
+	var respawned []string
+	service.respawnClaudeSelf = func(id string) error {
+		respawned = append(respawned, id)
+		return nil
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := service.Run([]string{"use", "1"}, strings.NewReader(""), &stdout, &stderr)
+
+	out := stdout.String()
+	if code != 0 || strings.Join(respawned, ",") != "e5" ||
+		!strings.HasSuffix(out, "This session restarts on this account in a few seconds.\n") {
+		t.Fatalf("code=%d respawned=%#v out=\n%s", code, respawned, out)
 	}
 }
 
@@ -620,7 +644,7 @@ func TestUseCodexLeavesClaudeBackgroundAlone(t *testing.T) {
 }
 
 func TestServiceForOtherHomeNeverTouchesRealClaudeDaemon(t *testing.T) {
-	if New(t.TempDir()).claudeBackground != nil {
+	if service := New(t.TempDir()); service.claudeBackground != nil || service.respawnClaudeSelf != nil {
 		t.Fatal("a service for a non-current home must not restart the real Claude daemon")
 	}
 }

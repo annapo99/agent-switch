@@ -33,6 +33,9 @@ type Service struct {
 	// account that was just switched in. Nil for any home other than the
 	// current user's, so tests never restart the real daemon.
 	claudeBackground func() (claudebg.Result, error)
+	// respawnClaudeSelf restarts the session ags runs in once the rest have
+	// moved. Nil wherever claudeBackground is.
+	respawnClaudeSelf func(id string) error
 }
 
 var shouldColor = func(stdout any) bool {
@@ -81,8 +84,9 @@ func NewWithUsageProviderAndVersion(home string, usageProvider usage.Provider, v
 	}
 	if isCurrentUserHome(home) {
 		service.claudeBackground = func() (claudebg.Result, error) {
-			return claudebg.Follow(claudebg.CLI)
+			return claudebg.Follow(claudebg.CLI, os.Getenv("CLAUDE_CODE_SESSION_ID"))
 		}
+		service.respawnClaudeSelf = claudebg.RespawnDetached
 	}
 	return service
 }
@@ -403,13 +407,21 @@ func (s *Service) moveClaudeBackground(stdout io.Writer) {
 	if count := len(result.Moved); count > 0 {
 		fmt.Fprintf(stdout, "Moved %d background %s to this account.\n", count, plural(count, "session", "sessions"))
 	}
-	if count := len(result.Busy); count > 0 {
-		fmt.Fprintf(stdout, "Left %d busy background %s on the previous account. Switch again once %s idle to move %s.\n",
-			count, plural(count, "session", "sessions"), plural(count, "it is", "they are"), plural(count, "it", "them"))
+	if count := len(result.Interrupted); count > 0 {
+		fmt.Fprintf(stdout, "Restarted %d busy background %s on this account; in-progress work was cut off.\n",
+			count, plural(count, "session", "sessions"))
 	}
 	if len(result.Failed) > 0 {
 		fmt.Fprintf(stdout, "Could not move background sessions: %s\n", strings.Join(result.Failed, ", "))
 	}
+	if result.Self == "" || s.respawnClaudeSelf == nil {
+		return
+	}
+	if err := s.respawnClaudeSelf(result.Self); err != nil {
+		fmt.Fprintf(stdout, "Could not move this session: %v\n", err)
+		return
+	}
+	fmt.Fprintln(stdout, "This session restarts on this account in a few seconds.")
 }
 
 func plural(count int, one, many string) string {
