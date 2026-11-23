@@ -832,3 +832,47 @@ func TestCodexAPIKeyProfilesStaySeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestUseSavesTheCurrentLoginBeforeSwitching(t *testing.T) {
+	home := t.TempDir()
+	saveTwoClaudeFileAccounts(t, home)
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"email": "second@example.com", "accessToken": "second-rotated-token"})
+
+	if code, out, _ := runService(t, home, []string{"use", "1", "--agent", "claude"}, ""); code != 0 {
+		t.Fatalf("use code=%d out=\n%s", code, out)
+	}
+
+	snapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/files/.claude/.credentials.json")
+	if snapshot["accessToken"] != "second-rotated-token" {
+		t.Fatalf("outgoing login was not saved: %#v", snapshot)
+	}
+	if active := readJSONFixture(t, home, ".claude/.credentials.json"); active["email"] != "first@example.com" {
+		t.Fatalf("active = %#v", active)
+	}
+}
+
+func TestUseStopsWhenSavingTheCurrentLoginRemovesTheTarget(t *testing.T) {
+	home := t.TempDir()
+	identity := map[string]any{"account_uuid": "account-1", "organization_uuid": "team-org"}
+	for index, dir := range []string{"1", "2"} {
+		writeJSONFixture(t, home, ".agent-switch/profiles/claude/"+dir+"/manifest.json", map[string]any{
+			"agent": "claude", "display_name": "Claude", "number": index + 1, "label": "same@example.com",
+			"fingerprint": "old-" + dir, "metadata": identity,
+		})
+	}
+	writeJSONFixture(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{
+		"emailAddress": "same@example.com", "accountUuid": "account-1", "organizationUuid": "team-org",
+	}})
+	current := `{"claudeAiOauth":{"accessToken":"current-access","refreshToken":"current-refresh"}}`
+	keychain := &memoryKeychain{item: &provider.KeychainItem{Account: "annapo", Secret: current}}
+	service := serviceWithKeychain(home, keychain)
+
+	code, out := runWith(service, []string{"use", "2"}, "")
+
+	if code != 1 || strings.Contains(out, "Switched") || !strings.Contains(out, "No saved account matches #2.") {
+		t.Fatalf("code=%d out=\n%s", code, out)
+	}
+	if keychain.item.Secret != current {
+		t.Fatalf("keychain = %#v", keychain.item)
+	}
+}

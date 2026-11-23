@@ -378,6 +378,11 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 		fmt.Fprintf(stdout, "Unsupported agent: %s\n", profile.Agent)
 		return 1
 	}
+	s.syncActiveProfiles(profile.Agent)
+	if len(s.store.ProfilesByNumber(profile.Number, profile.Agent)) == 0 {
+		fmt.Fprintf(stdout, "No saved account matches #%d.\n", number)
+		return 1
+	}
 	if err := provider.ApplySnapshot(s.home, s.store.ProfileDir(profile.Agent, profile.Number)); err != nil {
 		fmt.Fprintln(stdout, err)
 		return 1
