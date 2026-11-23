@@ -353,3 +353,63 @@ func TestListProfilesReadsCredentialKindFromSnapshot(t *testing.T) {
 		t.Fatalf("metadata without snapshot = %#v", metadata)
 	}
 }
+
+func TestListProfilesReadsAgentAndNumberFromDirectory(t *testing.T) {
+	home := t.TempDir()
+	writeStoreJSON(t, filepath.Join(home, ".agent-switch/profiles/claude/3/manifest.json"), map[string]any{
+		"agent":  "../../outside",
+		"number": 9,
+		"label":  "annapo@example.com",
+	})
+	s := New(home)
+
+	profiles := s.ListProfiles("")
+
+	if len(profiles) != 1 || profiles[0].Agent != "claude" || profiles[0].Number != 3 {
+		t.Fatalf("profiles = %+v", profiles)
+	}
+	if !s.RemoveProfile(profiles[0].Agent, profiles[0].Number) {
+		t.Fatal("profile was not removed")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/3")); !os.IsNotExist(err) {
+		t.Fatalf("profile directory still exists: %v", err)
+	}
+}
+
+func TestCreateProfileNeverReusesAnExistingDirectory(t *testing.T) {
+	home := t.TempDir()
+	taken := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	if err := os.MkdirAll(taken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taken, "keychain.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(home)
+
+	profile, err := s.CreateProfile(active("claude", "annapo@example.com", "fp", nil))
+
+	if err != nil || profile.Number != 2 {
+		t.Fatalf("profile = %+v err=%v", profile, err)
+	}
+}
+
+func TestCreateProfileKeepsProfilesPrivate(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".agent-switch")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := New(home)
+
+	if _, err := s.CreateProfile(active("claude", "annapo@example.com", "fp", nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dir := range []string{root, s.ProfileDir("claude", 1)} {
+		info, err := os.Stat(dir)
+		if err != nil || info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s mode = %v err=%v", dir, info.Mode().Perm(), err)
+		}
+	}
+}

@@ -162,7 +162,8 @@ available.
 `agent-switch` manages local credentials. Treat saved profiles as sensitive.
 
 - It does not print token values.
-- It stores credential snapshots under `~/.agent-switch/profiles/`.
+- It stores credential snapshots under `~/.agent-switch/profiles/` and keeps
+  `~/.agent-switch` readable by your user only.
 - It hands Keychain credentials to `security` over stdin, so they stay out of
   the process list. When that does not work, or the credentials are too large
   for one input line (a few kilobytes), they are passed as an argument.

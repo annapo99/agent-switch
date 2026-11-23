@@ -323,7 +323,7 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 		if claudeKeychainFingerprint(item.Secret) != account.Fingerprint {
 			return errors.New("credentials changed while saving the Claude account; run the command again")
 		}
-		if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		if err := os.MkdirAll(profileDir, 0o700); err != nil {
 			return err
 		}
 		data, err := json.MarshalIndent(map[string]string{

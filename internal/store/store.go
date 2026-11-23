@@ -18,6 +18,7 @@ type Store struct {
 }
 
 func New(home string) *Store {
+	_ = os.Chmod(filepath.Join(home, ".agent-switch"), 0o700)
 	return &Store{home: home}
 }
 
@@ -36,13 +37,22 @@ func (s *Store) NextNumber(agent string) int {
 }
 
 func (s *Store) CreateProfile(account model.ActiveAccount) (model.Profile, error) {
-	number := s.NextNumber(account.Agent)
-	profile := profileFromAccount(account, number, time.Now().UTC().Format(time.RFC3339Nano))
-	dir := s.ProfileDir(account.Agent, number)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(s.home, ".agent-switch", "profiles", account.Agent), 0o700); err != nil {
 		return model.Profile{}, err
 	}
-	if err := writeProfile(filepath.Join(dir, "manifest.json"), profile); err != nil {
+	number := s.NextNumber(account.Agent)
+	for {
+		err := os.Mkdir(s.ProfileDir(account.Agent, number), 0o700)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return model.Profile{}, err
+		}
+		number++
+	}
+	profile := profileFromAccount(account, number, time.Now().UTC().Format(time.RFC3339Nano))
+	if err := writeProfile(filepath.Join(s.ProfileDir(account.Agent, number), "manifest.json"), profile); err != nil {
 		return model.Profile{}, err
 	}
 	return profile, nil
@@ -56,7 +66,7 @@ func (s *Store) UpdateProfile(existing model.Profile, account model.ActiveAccoun
 	profile := profileFromAccount(account, existing.Number, createdAt)
 	profile.Name = existing.Name
 	dir := s.ProfileDir(existing.Agent, existing.Number)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return model.Profile{}, err
 	}
 	if err := writeProfile(filepath.Join(dir, "manifest.json"), profile); err != nil {
@@ -115,6 +125,8 @@ func (s *Store) ListProfiles(agent string) []model.Profile {
 			profileDir := filepath.Join(agentDir, strconv.Itoa(number))
 			profile, err := readProfile(filepath.Join(profileDir, "manifest.json"))
 			if err == nil {
+				profile.Agent = agentName
+				profile.Number = number
 				if hydrated, hydrateErr := hydrateClaudeIdentity(profile, profileDir); hydrateErr == nil {
 					profile = hydrated
 				}
