@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
@@ -48,40 +49,106 @@ type KeychainBackend interface {
 	WriteItem(service, account, secret string) error
 }
 
-type SecurityKeychainBackend struct{}
+type SecurityKeychainBackend struct {
+	run func(input string, args ...string) (string, error)
+}
 
 func (SecurityKeychainBackend) IsAvailable(home string) bool {
 	current, err := os.UserHomeDir()
 	return runtime.GOOS == "darwin" && err == nil && filepath.Clean(home) == filepath.Clean(current)
 }
 
-func (SecurityKeychainBackend) ReadItem(service string) (*KeychainItem, error) {
-	secretCmd := exec.Command("security", "find-generic-password", "-s", service, "-w")
-	secret, err := secretCmd.Output()
+func (b SecurityKeychainBackend) ReadItem(service string) (*KeychainItem, error) {
+	secret, err := b.security("", "find-generic-password", "-s", service, "-w")
 	if err != nil {
 		return nil, err
 	}
 	account := service
-	meta, err := exec.Command("security", "find-generic-password", "-s", service).CombinedOutput()
-	if err == nil {
+	if meta, err := b.security("", "find-generic-password", "-s", service); err == nil {
 		re := regexp.MustCompile(`"acct"<blob>="([^"]*)"`)
-		if match := re.FindStringSubmatch(string(meta)); len(match) == 2 && match[1] != "" {
+		if match := re.FindStringSubmatch(meta); len(match) == 2 && match[1] != "" {
 			account = match[1]
 		}
 	}
-	return &KeychainItem{Account: account, Secret: strings.TrimRight(string(secret), "\n")}, nil
+	return &KeychainItem{Account: account, Secret: securityPassword(secret)}, nil
 }
 
-func (SecurityKeychainBackend) WriteItem(service, account, secret string) error {
-	cmd := exec.Command("security", "add-generic-password", "-U", "-s", service, "-a", account, "-w", secret)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if len(output) > 0 {
-			return fmt.Errorf("%s", strings.TrimSpace(string(output)))
+func (b SecurityKeychainBackend) WriteItem(service, account, secret string) error {
+	if line, ok := securityAddCommandLine(service, account, secret); ok {
+		if _, err := b.security(line, "-i"); err == nil && b.holds(service, secret) {
+			return nil
 		}
-		return err
 	}
-	return nil
+	_, err := b.security("", "add-generic-password", "-U", "-s", service, "-a", account, "-w", secret)
+	return err
+}
+
+func (b SecurityKeychainBackend) holds(service, secret string) bool {
+	stored, err := b.security("", "find-generic-password", "-s", service, "-w")
+	return err == nil && securityPassword(stored) == secret
+}
+
+func (b SecurityKeychainBackend) security(input string, args ...string) (string, error) {
+	if b.run != nil {
+		return b.run(input, args...)
+	}
+	cmd := exec.Command("security", args...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if message := strings.TrimSpace(stderr.String()); message != "" {
+			return "", &securityError{message: message, err: err}
+		}
+		return "", err
+	}
+	return stdout.String(), nil
+}
+
+type securityError struct {
+	message string
+	err     error
+}
+
+func (e *securityError) Error() string { return e.message }
+func (e *securityError) Unwrap() error { return e.err }
+
+func securityPassword(output string) string {
+	password := strings.TrimRight(output, "\n")
+	if decoded, err := hex.DecodeString(password); err == nil && len(decoded) > 0 && decoded[0] == '{' && utf8.Valid(decoded) {
+		return string(decoded)
+	}
+	return password
+}
+
+const securityStdinLineLimit = 3800
+
+func securityAddCommandLine(service, account, secret string) (string, bool) {
+	if service == "" || account == "" || secret == "" || !isPrintableASCII(service+account) {
+		return "", false
+	}
+	password := "-X " + hex.EncodeToString([]byte(secret))
+	if isPrintableASCII(secret) {
+		password = "-w " + securityQuote(secret)
+	}
+	line := fmt.Sprintf("add-generic-password -U -s %s -a %s %s\n", securityQuote(service), securityQuote(account), password)
+	return line, len(line) <= securityStdinLineLimit
+}
+
+func isPrintableASCII(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x20 || value[index] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func securityQuote(value string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
 }
 
 type FileAuthProvider struct {
@@ -361,7 +428,7 @@ func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, d
 	if service == "" {
 		service = ClaudeKeychainService
 	}
-	secret := snapshot["secret"]
+	secret := securityPassword(snapshot["secret"])
 	if secret == "" {
 		return errors.New("invalid Claude keychain backup")
 	}
