@@ -20,6 +20,7 @@ import (
 
 	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
+	"github.com/annapo99/agent-switch/internal/provider"
 )
 
 const CodexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
@@ -168,6 +169,7 @@ type ClaudeOAuthProvider struct {
 	// endpoint does not serve, from the rate limit headers of a model request.
 	Prober                func(accessToken string) (map[string]any, error)
 	TokenRefresher        func(credentials string) (string, error)
+	ActiveCredentials     func(home string) (string, bool)
 	RestrictToCurrentHome bool
 	NowEpoch              int64
 }
@@ -176,6 +178,7 @@ func (p ClaudeOAuthProvider) Load(home string) map[model.MetadataKey]model.Metad
 	if p.RestrictToCurrentHome && !isCurrentHome(home) {
 		return nil
 	}
+	active := p.activeLogin(home)
 	metadata := map[model.MetadataKey]model.Metadata{}
 	for _, profileDir := range claudeProfileDirs(home) {
 		manifest := readJSON(filepath.Join(profileDir, "manifest.json"))
@@ -188,7 +191,9 @@ func (p ClaudeOAuthProvider) Load(home string) map[model.MetadataKey]model.Metad
 			continue
 		}
 		var invalidRefresh bool
-		credentials, invalidRefresh = p.refreshIfExpired(profileDir, credentials)
+		if !active.owns(manifest, credentials) {
+			credentials, invalidRefresh = p.refreshIfExpired(profileDir, credentials)
+		}
 		profileMetadata := model.Metadata{}
 		if status := OAuthStatusFromClaudeCredentials(credentials, p.NowEpoch); status != "" {
 			if invalidRefresh {
@@ -208,6 +213,62 @@ func (p ClaudeOAuthProvider) Load(home string) map[model.MetadataKey]model.Metad
 	}
 	return metadata
 }
+
+type activeClaudeLogin struct {
+	known        bool
+	refreshToken string
+	accountUUID  string
+	organization string
+}
+
+func (p ClaudeOAuthProvider) activeLogin(home string) activeClaudeLogin {
+	read := p.ActiveCredentials
+	if read == nil {
+		read = activeClaudeCredentials
+	}
+	credentials, known := read(home)
+	oauthAccount, _ := readJSON(filepath.Join(home, ".claude.json"))["oauthAccount"].(map[string]any)
+	return activeClaudeLogin{
+		known:        known,
+		refreshToken: stringValue(claudeOAuthData(credentials)["refreshToken"]),
+		accountUUID:  strings.ToLower(stringValue(oauthAccount["accountUuid"])),
+		organization: strings.ToLower(stringValue(oauthAccount["organizationUuid"])),
+	}
+}
+
+func (a activeClaudeLogin) owns(manifest map[string]any, credentials string) bool {
+	if !a.known {
+		return true
+	}
+	if a.refreshToken != "" && stringValue(claudeOAuthData(credentials)["refreshToken"]) == a.refreshToken {
+		return true
+	}
+	metadata := manifestMetadata(manifest)
+	return a.accountUUID != "" && a.organization != "" &&
+		strings.ToLower(metadata.String(model.MetadataAccountUUID)) == a.accountUUID &&
+		strings.ToLower(metadata.String(model.MetadataOrganizationUUID)) == a.organization
+}
+
+func activeClaudeCredentials(home string) (string, bool) {
+	keychain := provider.SecurityKeychainBackend{}
+	if keychain.IsAvailable(home) {
+		item, err := keychain.ReadItem(claudeKeychainService)
+		if err == nil {
+			return item.Secret, true
+		}
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != securityItemNotFound {
+			return "", false
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", false
+	}
+	return string(data), true
+}
+
+const securityItemNotFound = 44
 
 // usageRows fetches the profile's usage. The usage endpoint answers about once
 // a minute per account and Claude Code polls it too, so when a fetch fails the

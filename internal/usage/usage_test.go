@@ -511,3 +511,91 @@ func TestUsagePayloadFromRateLimitHeaders(t *testing.T) {
 		t.Fatalf("payload without headers = %#v", empty)
 	}
 }
+
+func TestClaudeOAuthProviderLeavesTheActiveLoginToClaudeCode(t *testing.T) {
+	useSeoulTime(t)
+
+	home := t.TempDir()
+	active := `{"claudeAiOauth":{"accessToken":"expired-token","refreshToken":"active-refresh-token","expiresAt":1783480000000}}`
+	for number, secret := range map[string]string{
+		"1": active,
+		"2": `{"claudeAiOauth":{"accessToken":"expired-token","refreshToken":"saved-refresh-token","expiresAt":1783480000000}}`,
+	} {
+		writeJSON(t, home, ".agent-switch/profiles/claude/"+number+"/manifest.json", map[string]any{
+			"agent": "claude", "number": number, "label": "account" + number + "@example.com",
+		})
+		writeJSON(t, home, ".agent-switch/profiles/claude/"+number+"/keychain.json", map[string]any{
+			"service": "Claude Code-credentials", "account": "annapo", "secret": secret,
+		})
+	}
+	var refreshed []string
+	provider := ClaudeOAuthProvider{
+		Fetcher: func(token string) (map[string]any, error) { return nil, http.ErrServerClosed },
+		TokenRefresher: func(credentials string) (string, error) {
+			refreshed = append(refreshed, credentials)
+			return `{"claudeAiOauth":{"accessToken":"fresh-token","refreshToken":"fresh-refresh-token","expiresAt":1783504032000}}`, nil
+		},
+		ActiveCredentials: func(string) (string, bool) {
+			return strings.TrimSuffix(active, "}") + `,"mcpOAuth":{"server":{"accessToken":"mcp"}}}`, true
+		},
+		NowEpoch: 1783486262,
+	}
+
+	provider.Load(home)
+
+	if len(refreshed) != 1 || !strings.Contains(refreshed[0], "saved-refresh-token") {
+		t.Fatalf("refreshed = %#v", refreshed)
+	}
+	snapshot := readJSON(filepath.Join(home, ".agent-switch/profiles/claude/1/keychain.json"))
+	if snapshot["secret"] != active {
+		t.Fatalf("active login was refreshed behind Claude Code: %#v", snapshot)
+	}
+}
+
+func TestClaudeOAuthProviderRefreshesNothingItCannotTellApartFromTheActiveLogin(t *testing.T) {
+	useSeoulTime(t)
+
+	expired := func(refreshToken string) string {
+		return `{"claudeAiOauth":{"accessToken":"expired-token","refreshToken":"` + refreshToken + `","expiresAt":1783480000000}}`
+	}
+	saveProfiles := func(home string) {
+		for number, organization := range map[string]string{"1": "team-org", "2": "enterprise-org"} {
+			writeJSON(t, home, ".agent-switch/profiles/claude/"+number+"/manifest.json", map[string]any{
+				"agent": "claude", "label": "same@example.com",
+				"metadata": map[string]any{"account_uuid": "account-1", "organization_uuid": organization},
+			})
+			writeJSON(t, home, ".agent-switch/profiles/claude/"+number+"/keychain.json", map[string]any{
+				"service": "Claude Code-credentials", "account": "annapo", "secret": expired("saved-" + organization),
+			})
+		}
+	}
+	load := func(home string, active func(string) (string, bool)) []string {
+		var refreshed []string
+		ClaudeOAuthProvider{
+			Fetcher: func(token string) (map[string]any, error) { return nil, http.ErrServerClosed },
+			TokenRefresher: func(credentials string) (string, error) {
+				refreshed = append(refreshed, credentials)
+				return expired("fresh"), nil
+			},
+			ActiveCredentials: active,
+			NowEpoch:          1783486262,
+		}.Load(home)
+		return refreshed
+	}
+
+	unreadable := t.TempDir()
+	saveProfiles(unreadable)
+	if refreshed := load(unreadable, func(string) (string, bool) { return "", false }); len(refreshed) != 0 {
+		t.Fatalf("refreshed without knowing the active login: %#v", refreshed)
+	}
+
+	sameIdentity := t.TempDir()
+	saveProfiles(sameIdentity)
+	writeJSON(t, sameIdentity, ".claude.json", map[string]any{"oauthAccount": map[string]any{
+		"accountUuid": "Account-1", "organizationUuid": "team-org",
+	}})
+	refreshed := load(sameIdentity, func(string) (string, bool) { return expired("rotated-by-claude-code"), true })
+	if len(refreshed) != 1 || !strings.Contains(refreshed[0], "saved-enterprise-org") {
+		t.Fatalf("refreshed = %#v", refreshed)
+	}
+}
