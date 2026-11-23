@@ -6,8 +6,41 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 )
+
+func withClaudeCredentialKind(profile model.Profile, profileDir string) model.Profile {
+	if profile.Agent != "claude" {
+		return profile
+	}
+	credentials := claudeCredentials(profileDir)
+	delete(profile.Metadata, model.MetadataCredentialKind)
+	delete(profile.Metadata, model.MetadataTokenID)
+	if kind := identity.ClaudeCredentialKind(credentials); kind != "" {
+		profile.Metadata[model.MetadataCredentialKind] = kind
+	}
+	if tokenID := identity.ClaudeTokenID(credentials); tokenID != "" {
+		profile.Metadata[model.MetadataTokenID] = tokenID
+	}
+	return profile
+}
+
+func claudeCredentials(profileDir string) string {
+	if data, err := os.ReadFile(filepath.Join(profileDir, "keychain.json")); err == nil {
+		var snapshot struct {
+			Secret string `json:"secret"`
+		}
+		if json.Unmarshal(data, &snapshot) == nil && snapshot.Secret != "" {
+			return snapshot.Secret
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(profileDir, "files", ".claude", ".credentials.json"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
 
 func hydrateClaudeIdentity(profile model.Profile, profileDir string) (model.Profile, error) {
 	if profile.Agent != "claude" ||

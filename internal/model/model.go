@@ -4,6 +4,8 @@ const (
 	MetadataAccountUUID      = "account_uuid"
 	MetadataOrganizationUUID = "organization_uuid"
 	MetadataOrganizationName = "organization_name"
+	MetadataCredentialKind   = "credential_kind"
+	MetadataTokenID          = "token_id"
 )
 
 type Metadata map[string]any

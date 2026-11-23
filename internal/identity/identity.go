@@ -1,6 +1,10 @@
 package identity
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/annapo99/agent-switch/internal/model"
@@ -40,12 +44,69 @@ func HasStableClaudeIdentity(agent string, metadata model.Metadata) bool {
 		normalized(metadata.String(model.MetadataOrganizationUUID)) != ""
 }
 
+const (
+	CredentialKindOAuth = "oauth"
+	CredentialKindToken = "token"
+)
+
+func ClaudeCredentialKind(credentials string) string {
+	oauth := claudeOAuth(credentials)
+	switch {
+	case oauth == nil || oauth.AccessToken == "":
+		return ""
+	case oauth.RefreshToken != "":
+		return CredentialKindOAuth
+	case len(oauth.Scopes) > 0 && !slices.Contains(oauth.Scopes, "user:profile"):
+		return CredentialKindToken
+	}
+	return ""
+}
+
+func ClaudeTokenID(credentials string) string {
+	if ClaudeCredentialKind(credentials) != CredentialKindToken {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("claude-token:" + claudeOAuth(credentials).AccessToken))
+	return hex.EncodeToString(sum[:8])
+}
+
+type claudeOAuthCredentials struct {
+	AccessToken  string   `json:"accessToken"`
+	RefreshToken string   `json:"refreshToken"`
+	Scopes       []string `json:"scopes"`
+}
+
+func claudeOAuth(credentials string) *claudeOAuthCredentials {
+	var data struct {
+		OAuth *claudeOAuthCredentials `json:"claudeAiOauth"`
+	}
+	if json.Unmarshal([]byte(credentials), &data) != nil {
+		return nil
+	}
+	return data.OAuth
+}
+
+func SameClaudeUser(profile model.Profile, account model.ActiveAccount) bool {
+	profileAccount := normalized(profile.Metadata.String(model.MetadataAccountUUID))
+	return profile.Agent == "claude" && account.Agent == "claude" &&
+		profileAccount != "" && profileAccount == normalized(account.Metadata.String(model.MetadataAccountUUID))
+}
+
 func SameLogicalAccount(profile model.Profile, account model.ActiveAccount) bool {
 	if profile.Agent != account.Agent {
 		return false
 	}
 	if profile.Agent != "claude" {
 		return SameLabel(profile.Label, account.Label)
+	}
+	profileKind := profile.Metadata.String(model.MetadataCredentialKind)
+	accountKind := account.Metadata.String(model.MetadataCredentialKind)
+	if profileKind != "" && accountKind != "" && profileKind != accountKind {
+		return false
+	}
+	if profileKind == CredentialKindToken && accountKind == CredentialKindToken {
+		tokenID := profile.Metadata.String(model.MetadataTokenID)
+		return tokenID != "" && tokenID == account.Metadata.String(model.MetadataTokenID)
 	}
 
 	profileAccount := normalized(profile.Metadata.String(model.MetadataAccountUUID))

@@ -292,3 +292,64 @@ func TestFindDuplicateKeepsProfilesWithoutReadableNameApart(t *testing.T) {
 		t.Fatalf("profiles = %+v", profiles)
 	}
 }
+
+func TestFindDuplicateTrustsExactCredentialsOverAnotherUsersIdentity(t *testing.T) {
+	s := New(t.TempDir())
+	browser := active("claude", "annapo@example.com", "browser-login", model.Metadata{
+		model.MetadataAccountUUID:      "account-1",
+		model.MetadataOrganizationUUID: "team-org",
+	})
+	if _, err := s.CreateProfile(browser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateProfile(active("claude", "bot", "token-login", nil)); err != nil {
+		t.Fatal(err)
+	}
+	other := active("claude", "other@example.com", "other-login", model.Metadata{
+		model.MetadataAccountUUID:      "account-2",
+		model.MetadataOrganizationUUID: "other-org",
+	})
+	if _, err := s.CreateProfile(other); err != nil {
+		t.Fatal(err)
+	}
+
+	for fingerprint, want := range map[string]int{"token-login": 2, "other-login": 3} {
+		mismatched := browser
+		mismatched.Fingerprint = fingerprint
+		duplicate, ok := s.FindDuplicate(mismatched)
+		if !ok || duplicate.Number != want {
+			t.Fatalf("fingerprint %s duplicate = %+v ok=%v", fingerprint, duplicate, ok)
+		}
+	}
+}
+
+func TestListProfilesReadsCredentialKindFromSnapshot(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeStoreJSON(t, filepath.Join(profileDir, "manifest.json"), map[string]any{
+		"agent":    "claude",
+		"number":   1,
+		"label":    "bot",
+		"metadata": map[string]any{model.MetadataCredentialKind: "token"},
+	})
+	writeStoreJSON(t, filepath.Join(profileDir, "keychain.json"), map[string]any{
+		"secret": `{"claudeAiOauth":{"accessToken":"access","refreshToken":"refresh"}}`,
+	})
+	s := New(home)
+
+	if kind := s.ListProfiles("claude")[0].Metadata.String(model.MetadataCredentialKind); kind != "oauth" {
+		t.Fatalf("kind = %q", kind)
+	}
+	writeStoreJSON(t, filepath.Join(profileDir, "keychain.json"), map[string]any{
+		"secret": `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","refreshToken":null,"scopes":["user:inference"]}}`,
+	})
+	if metadata := s.ListProfiles("claude")[0].Metadata; metadata.String(model.MetadataCredentialKind) != "token" || metadata.String(model.MetadataTokenID) == "" {
+		t.Fatalf("token metadata = %#v", metadata)
+	}
+	if err := os.Remove(filepath.Join(profileDir, "keychain.json")); err != nil {
+		t.Fatal(err)
+	}
+	if metadata := s.ListProfiles("claude")[0].Metadata; metadata.String(model.MetadataCredentialKind) != "" || metadata.String(model.MetadataTokenID) != "" {
+		t.Fatalf("metadata without snapshot = %#v", metadata)
+	}
+}

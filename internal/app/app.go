@@ -210,7 +210,7 @@ func (s *Service) Save(stdout io.Writer, stdin io.Reader, agent string, yes bool
 				fmt.Fprintln(stdout, line)
 			}
 			fmt.Fprintln(stdout)
-			if item.duplicate.Fingerprint != item.account.Fingerprint {
+			if s.needsUpdate(item.account, item.duplicate) {
 				profile, removed, err := s.updateAccount(item.provider, item.account, item.duplicate)
 				if err != nil {
 					fmt.Fprintln(stdout, err)
@@ -343,11 +343,13 @@ func (s *Service) SaveToken(stdout, stderr io.Writer, stdin io.Reader, label str
 	return 0
 }
 
-// tokenProfile finds a saved profile with the token's label and no
-// organization identity, which only another token profile can have.
+// tokenProfile finds the saved token profile a new token replaces.
 func (s *Service) tokenProfile(account model.ActiveAccount) (model.Profile, bool) {
 	for _, profile := range s.store.ListProfiles(account.Agent) {
-		if identity.SameLogicalAccount(profile, account) {
+		if profile.Metadata.String(model.MetadataCredentialKind) != identity.CredentialKindToken {
+			continue
+		}
+		if identity.SameLabel(profile.Label, account.Label) || identity.SameLogicalAccount(profile, account) {
 			return profile, true
 		}
 	}
@@ -564,11 +566,19 @@ func (s *Service) detectedAccounts(agent string) []detectedAccount {
 func (s *Service) syncActiveProfiles(agent string) {
 	for _, item := range s.detectedAccounts(agent) {
 		duplicate, ok := s.store.FindDuplicate(item.account)
-		if !ok || duplicate.Fingerprint == item.account.Fingerprint {
+		if !ok || !s.needsUpdate(item.account, duplicate) {
 			continue
 		}
 		_, _, _ = s.updateAccount(item.provider, item.account, duplicate)
 	}
+}
+
+func (s *Service) needsUpdate(account model.ActiveAccount, duplicate model.Profile) bool {
+	if duplicate.Fingerprint == account.Fingerprint {
+		return false
+	}
+	_, saved := s.store.CredentialsHolder(account)
+	return !saved
 }
 
 func (s *Service) saveAccount(provider provider.Provider, account model.ActiveAccount) (model.Profile, error) {
@@ -583,6 +593,9 @@ func (s *Service) saveAccount(provider provider.Provider, account model.ActiveAc
 }
 
 func (s *Service) updateAccount(provider provider.Provider, account model.ActiveAccount, existing model.Profile) (model.Profile, []model.Profile, error) {
+	if existing.Metadata.String(model.MetadataCredentialKind) == identity.CredentialKindToken {
+		account.Label = existing.Label
+	}
 	if err := provider.SaveSnapshot(s.home, account, s.store.ProfileDir(existing.Agent, existing.Number)); err != nil {
 		return model.Profile{}, nil, err
 	}
@@ -618,9 +631,14 @@ func (s *Service) resolveProfile(matches []model.Profile, stdout io.Writer, stdi
 func (s *Service) activeProfileKeys() map[string]bool {
 	active := map[string]bool{}
 	for _, item := range s.detectedAccounts("") {
-		if profile, ok := s.store.FindDuplicate(item.account); ok {
-			active[profileKey(profile)] = true
+		profile, ok := s.store.FindDuplicate(item.account)
+		if !ok {
+			continue
 		}
+		if holder, saved := s.store.CredentialsHolder(item.account); saved && profile.Fingerprint != item.account.Fingerprint {
+			profile = holder
+		}
+		active[profileKey(profile)] = true
 	}
 	return active
 }

@@ -561,3 +561,63 @@ func toStrings(value any) []string {
 	}
 	return out
 }
+
+func TestClaudeProviderDetectsCredentialKind(t *testing.T) {
+	home := t.TempDir()
+	keychain := &fakeKeychain{item: &KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"access","refreshToken":"refresh"}}`}}
+	p := NewClaudeProvider(keychain)
+
+	browser, _ := p.Detect(home)
+	keychain.item.Secret = `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","refreshToken":null,"scopes":["user:inference"]}}`
+	token, _ := p.Detect(home)
+	tokenAccount, _ := p.TokenAccount(home, "bot", "sk-ant-oat01-test", time.Now())
+
+	if browser.Metadata.String(model.MetadataCredentialKind) != "oauth" ||
+		token.Metadata.String(model.MetadataCredentialKind) != "token" ||
+		tokenAccount.Metadata.String(model.MetadataCredentialKind) != "token" {
+		t.Fatalf("browser=%#v token=%#v tokenAccount=%#v", browser.Metadata, token.Metadata, tokenAccount.Metadata)
+	}
+}
+
+func TestClaudeProviderIgnoresStaleIdentityForTokenLogin(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{
+		"emailAddress": "annapo@example.com", "accountUuid": "account-1", "organizationUuid": "team-org", "organizationName": "Team",
+	}})
+	secret := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","refreshToken":null,"scopes":["user:inference"]}}`
+	p := NewClaudeProvider(&fakeKeychain{item: &KeychainItem{Account: "annapo", Secret: secret}})
+
+	account, _ := p.Detect(home)
+
+	if len(account.Metadata) != 2 || account.Metadata.String(model.MetadataTokenID) == "" ||
+		account.Metadata.String(model.MetadataCredentialKind) != "token" {
+		t.Fatalf("metadata = %#v", account.Metadata)
+	}
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	account.Label = "bot"
+	if err := p.SaveSnapshot(home, account, profileDir); err != nil {
+		t.Fatal(err)
+	}
+	config := readJSONPath(t, filepath.Join(profileDir, "config.json"))
+	if got := config["oauthAccount"].(map[string]any); len(got) != 1 || got["emailAddress"] != "bot" {
+		t.Fatalf("config = %#v", config)
+	}
+}
+
+func TestKeychainSnapshotRefusesCredentialsThatChangedSinceDetection(t *testing.T) {
+	home := t.TempDir()
+	keychain := &fakeKeychain{item: &KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"first","refreshToken":"first"}}`}}
+	p := NewClaudeProvider(keychain)
+	account, _ := p.Detect(home)
+	keychain.item = &KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"second","refreshToken":"second"}}`}
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+
+	err := p.SaveSnapshot(home, account, profileDir)
+
+	if err == nil {
+		t.Fatal("credentials that changed after detection were saved")
+	}
+	if _, statErr := os.Stat(filepath.Join(profileDir, "keychain.json")); statErr == nil {
+		t.Fatal("a snapshot was written")
+	}
+}

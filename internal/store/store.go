@@ -118,7 +118,7 @@ func (s *Store) ListProfiles(agent string) []model.Profile {
 				if hydrated, hydrateErr := hydrateClaudeIdentity(profile, profileDir); hydrateErr == nil {
 					profile = hydrated
 				}
-				profiles = append(profiles, profile)
+				profiles = append(profiles, withClaudeCredentialKind(profile, profileDir))
 			}
 		}
 	}
@@ -127,7 +127,11 @@ func (s *Store) ListProfiles(agent string) []model.Profile {
 
 func (s *Store) FindDuplicate(account model.ActiveAccount) (model.Profile, bool) {
 	profiles := s.ListProfiles(account.Agent)
+	exact, hasExact := exactFingerprintMatch(profiles, account)
 	if identity.HasStableClaudeIdentity(account.Agent, account.Metadata) {
+		if hasExact && !identity.SameClaudeUser(exact, account) {
+			return exact, true
+		}
 		for _, profile := range profiles {
 			if identity.SameLogicalAccount(profile, account) {
 				return profile, true
@@ -135,15 +139,27 @@ func (s *Store) FindDuplicate(account model.ActiveAccount) (model.Profile, bool)
 		}
 		return model.Profile{}, false
 	}
-	if account.Fingerprint != "" {
-		for _, profile := range profiles {
-			if profile.Agent == account.Agent && profile.Fingerprint != "" && profile.Fingerprint == account.Fingerprint {
-				return profile, true
-			}
-		}
+	if hasExact {
+		return exact, true
 	}
 	for _, profile := range profiles {
 		if identity.SameLogicalAccount(profile, account) {
+			return profile, true
+		}
+	}
+	return model.Profile{}, false
+}
+
+func (s *Store) CredentialsHolder(account model.ActiveAccount) (model.Profile, bool) {
+	return exactFingerprintMatch(s.ListProfiles(account.Agent), account)
+}
+
+func exactFingerprintMatch(profiles []model.Profile, account model.ActiveAccount) (model.Profile, bool) {
+	if account.Fingerprint == "" {
+		return model.Profile{}, false
+	}
+	for _, profile := range profiles {
+		if profile.Agent == account.Agent && profile.Fingerprint == account.Fingerprint {
 			return profile, true
 		}
 	}

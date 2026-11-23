@@ -876,3 +876,177 @@ func TestUseStopsWhenSavingTheCurrentLoginRemovesTheTarget(t *testing.T) {
 		t.Fatalf("keychain = %#v", keychain.item)
 	}
 }
+
+func saveBrowserLoginAndTokenProfile(t *testing.T, home string) (*Service, *memoryKeychain, string) {
+	t.Helper()
+	annapoSecret := `{"claudeAiOauth":{"accessToken":"annapo-access","refreshToken":"annapo-refresh"}}`
+	keychain := &memoryKeychain{item: &provider.KeychainItem{Account: "annapo", Secret: annapoSecret}}
+	writeJSONFixture(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{
+		"emailAddress":     "annapo@example.com",
+		"accountUuid":      "account-annapo",
+		"organizationUuid": "org-team",
+		"organizationName": "Team",
+	}})
+	service := serviceWithKeychain(home, keychain)
+	if code, out := runWith(service, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+		t.Fatalf("save annapo code=%d out=\n%s", code, out)
+	}
+	if code, out := runWith(service, []string{"save", "--token", "--label", "bot"}, "sk-ant-oat01-bot\n"); code != 0 {
+		t.Fatalf("save token code=%d out=\n%s", code, out)
+	}
+	return service, keychain, annapoSecret
+}
+
+func TestBrowserLoginSurvivesWhenClaudeConfigLagsBehindTokenSwitch(t *testing.T) {
+	home := t.TempDir()
+	service, keychain, annapoSecret := saveBrowserLoginAndTokenProfile(t, home)
+	annapoConfig := readJSONFixture(t, home, ".claude.json")
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 {
+		t.Fatalf("use token code=%d out=\n%s", code, out)
+	}
+	writeJSONFixture(t, home, ".claude.json", annapoConfig)
+
+	if code, out := runWith(service, []string{"list"}, ""); code != 0 || !strings.Contains(out, "2: bot (active)") {
+		t.Fatalf("list code=%d out=\n%s", code, out)
+	}
+	keychain.item.Secret = strings.TrimSuffix(keychain.item.Secret, "}") + `,"mcpOAuth":{"server":{"accessToken":"mcp"}}}`
+	runWith(service, []string{"list"}, "")
+	runWith(service, []string{"save", "--agent", "claude", "--yes"}, "")
+
+	annapoSnapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/keychain.json")
+	if annapoSnapshot["secret"] != annapoSecret {
+		t.Fatalf("browser login was overwritten: %#v", annapoSnapshot)
+	}
+	tokenManifest := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/manifest.json")
+	tokenSnapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/keychain.json")
+	tokenConfig := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/config.json")
+	if tokenManifest["label"] != "bot" || !strings.Contains(tokenSnapshot["secret"].(string), "mcpOAuth") ||
+		len(tokenConfig["oauthAccount"].(map[string]any)) != 1 || tokenConfig["oauthAccount"].(map[string]any)["emailAddress"] != "bot" {
+		t.Fatalf("token profile took on the browser login: manifest=%#v config=%#v", tokenManifest, tokenConfig)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/3")); err == nil {
+		t.Fatal("the mismatched login was saved as a third profile")
+	}
+}
+
+func TestTokenProfileSurvivesWhenClaudeConfigLagsBehindBrowserLogin(t *testing.T) {
+	home := t.TempDir()
+	service, keychain, _ := saveBrowserLoginAndTokenProfile(t, home)
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 {
+		t.Fatalf("use token code=%d out=\n%s", code, out)
+	}
+	keychain.item.Secret = `{"claudeAiOauth":{"accessToken":"other-access","refreshToken":"other-refresh"}}`
+
+	code, out := runWith(service, []string{"list"}, "")
+
+	if code != 0 || strings.Contains(out, "(active)") {
+		t.Fatalf("list code=%d out=\n%s", code, out)
+	}
+	tokenSnapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/keychain.json")
+	if !strings.Contains(tokenSnapshot["secret"].(string), "sk-ant-oat01-bot") {
+		t.Fatalf("token profile was overwritten: %#v", tokenSnapshot)
+	}
+}
+
+func TestOtherOrganizationSurvivesWhenClaudeConfigLagsBehind(t *testing.T) {
+	home := t.TempDir()
+	keychain := &memoryKeychain{}
+	service := serviceWithKeychain(home, keychain)
+	secrets := map[string]string{
+		"team-org":       `{"claudeAiOauth":{"accessToken":"team-access","refreshToken":"team-refresh"}}`,
+		"enterprise-org": `{"claudeAiOauth":{"accessToken":"enterprise-access","refreshToken":"enterprise-refresh"}}`,
+	}
+	signIn := func(organization string) {
+		writeJSONFixture(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{
+			"emailAddress": "same@example.com", "accountUuid": "account-1", "organizationUuid": organization,
+		}})
+	}
+	for _, organization := range []string{"team-org", "enterprise-org"} {
+		keychain.item = &provider.KeychainItem{Account: "annapo", Secret: secrets[organization]}
+		signIn(organization)
+		if code, out := runWith(service, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+			t.Fatalf("save %s code=%d out=\n%s", organization, code, out)
+		}
+	}
+	signIn("team-org")
+
+	code, out := runWith(service, []string{"list"}, "")
+	runWith(service, []string{"save", "--agent", "claude", "--yes"}, "")
+
+	if code != 0 || !strings.Contains(out, "2: same@example.com (active)") || strings.Contains(out, "1: same@example.com (active)") {
+		t.Fatalf("list code=%d out=\n%s", code, out)
+	}
+	if snapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/keychain.json"); snapshot["secret"] != secrets["team-org"] {
+		t.Fatalf("team login was overwritten: %#v", snapshot)
+	}
+}
+
+func TestTokenProfilesStayApartWhenClaudeConfigLagsBehind(t *testing.T) {
+	home := t.TempDir()
+	keychain := &memoryKeychain{}
+	service := serviceWithKeychain(home, keychain)
+	for label, token := range map[string]string{"first": "sk-ant-oat01-first", "second": "sk-ant-oat01-second"} {
+		if code, out := runWith(service, []string{"save", "--token", "--label", label}, token+"\n"); code != 0 {
+			t.Fatalf("save %s code=%d out=\n%s", label, code, out)
+		}
+	}
+	numbers := map[string]string{}
+	for _, number := range []string{"1", "2"} {
+		numbers[readJSONFixture(t, home, ".agent-switch/profiles/claude/"+number+"/manifest.json")["label"].(string)] = number
+	}
+	if code, out := runWith(service, []string{"use", numbers["second"]}, ""); code != 0 {
+		t.Fatalf("use second code=%d out=\n%s", code, out)
+	}
+	writeJSONFixture(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{"emailAddress": "first"}})
+	keychain.item.Secret = strings.TrimSuffix(keychain.item.Secret, "}") + `,"mcpOAuth":{"server":{"accessToken":"mcp"}}}`
+
+	if code, out := runWith(service, []string{"use", numbers["first"]}, ""); code != 0 {
+		t.Fatalf("use first code=%d out=\n%s", code, out)
+	}
+
+	first := readJSONFixture(t, home, ".agent-switch/profiles/claude/"+numbers["first"]+"/keychain.json")["secret"].(string)
+	second := readJSONFixture(t, home, ".agent-switch/profiles/claude/"+numbers["second"]+"/keychain.json")["secret"].(string)
+	secondManifest := readJSONFixture(t, home, ".agent-switch/profiles/claude/"+numbers["second"]+"/manifest.json")
+	if !strings.Contains(first, "sk-ant-oat01-first") || strings.Contains(first, "mcpOAuth") {
+		t.Fatalf("first token was overwritten: %s", first)
+	}
+	if !strings.Contains(second, "sk-ant-oat01-second") || !strings.Contains(second, "mcpOAuth") || secondManifest["label"] != "second" {
+		t.Fatalf("second token did not keep its own login: %s manifest=%#v", second, secondManifest)
+	}
+	if !strings.Contains(keychain.item.Secret, "sk-ant-oat01-first") {
+		t.Fatalf("keychain = %#v", keychain.item)
+	}
+}
+
+func TestSaveTokenKeepsBrowserLoginWithTheSameLabel(t *testing.T) {
+	home := t.TempDir()
+	annapoSecret := `{"claudeAiOauth":{"accessToken":"annapo-access","refreshToken":"annapo-refresh"}}`
+	service := serviceWithKeychain(home, &memoryKeychain{item: &provider.KeychainItem{Account: "annapo", Secret: annapoSecret}})
+	if code, out := runWith(service, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+		t.Fatalf("save annapo code=%d out=\n%s", code, out)
+	}
+
+	code, out := runWith(service, []string{"save", "--token", "--label", "annapo"}, "sk-ant-oat01-annapo\n")
+
+	if code != 0 || !strings.Contains(out, "Saved claude account #2 (token: annapo)") {
+		t.Fatalf("code=%d out=\n%s", code, out)
+	}
+	if snapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/keychain.json"); snapshot["secret"] != annapoSecret {
+		t.Fatalf("browser login was overwritten: %#v", snapshot)
+	}
+}
+
+func TestSaveTokenUnderAnotherLabelRenamesItsProfile(t *testing.T) {
+	home := t.TempDir()
+	service := serviceWithKeychain(home, &memoryKeychain{})
+	runWith(service, []string{"save", "--token", "--label", "bot"}, "sk-ant-oat01-bot\n")
+
+	code, out := runWith(service, []string{"save", "--token", "--label", "robot"}, "sk-ant-oat01-bot\n")
+
+	if code != 0 || !strings.Contains(out, "Updated claude account #1 (token: robot)") {
+		t.Fatalf("code=%d out=\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/2")); err == nil {
+		t.Fatal("the same token was saved twice")
+	}
+}

@@ -208,7 +208,7 @@ func (p *ClaudeProvider) DisplayName() string { return "Claude" }
 
 func (p *ClaudeProvider) Detect(home string) (model.ActiveAccount, bool) {
 	if item := p.readKeychainItem(home); item != nil {
-		metadata := claudeJSONMetadata(home)
+		metadata := claudeAccountMetadata(home, item.Secret)
 		return model.ActiveAccount{
 			Agent:       "claude",
 			DisplayName: "Claude",
@@ -223,8 +223,28 @@ func (p *ClaudeProvider) Detect(home string) (model.ActiveAccount, bool) {
 	if !ok {
 		return model.ActiveAccount{}, false
 	}
-	account.Metadata = claudeJSONMetadata(home)
+	credentials, _ := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
+	account.Metadata = claudeAccountMetadata(home, string(credentials))
 	return account, true
+}
+
+func claudeAccountMetadata(home, credentials string) model.Metadata {
+	kind := identity.ClaudeCredentialKind(credentials)
+	if kind == identity.CredentialKindToken {
+		return tokenMetadata(credentials)
+	}
+	metadata := claudeJSONMetadata(home)
+	if kind != "" {
+		metadata[model.MetadataCredentialKind] = kind
+	}
+	return metadata
+}
+
+func tokenMetadata(credentials string) model.Metadata {
+	return model.Metadata{
+		model.MetadataCredentialKind: identity.CredentialKindToken,
+		model.MetadataTokenID:        identity.ClaudeTokenID(credentials),
+	}
 }
 
 func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, profileDir string) error {
@@ -232,6 +252,9 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 		item := p.readKeychainItem(home)
 		if item == nil {
 			return nil
+		}
+		if claudeKeychainFingerprint(item.Secret) != account.Fingerprint {
+			return errors.New("credentials changed while saving the Claude account; run the command again")
 		}
 		if err := os.MkdirAll(profileDir, 0o755); err != nil {
 			return err
@@ -246,6 +269,9 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 		}
 		if err := os.WriteFile(filepath.Join(profileDir, "keychain.json"), append(data, '\n'), 0o600); err != nil {
 			return err
+		}
+		if identity.ClaudeCredentialKind(item.Secret) == identity.CredentialKindToken {
+			return writeTokenConfigSnapshot(account.Label, profileDir)
 		}
 		return writeClaudeConfigSnapshot(home, profileDir)
 	}
@@ -275,7 +301,7 @@ func (p *ClaudeProvider) TokenAccount(home, label, token string, now time.Time) 
 		Fingerprint: claudeKeychainFingerprint(string(secret)),
 		Source:      "Token: claude setup-token",
 		AuthFiles:   []string{"keychain:" + ClaudeKeychainService},
-		Metadata:    model.Metadata{},
+		Metadata:    tokenMetadata(string(secret)),
 	}, string(secret)
 }
 
@@ -294,6 +320,10 @@ func (p *ClaudeProvider) SaveTokenSnapshot(home, label, secret, profileDir strin
 	}); err != nil {
 		return err
 	}
+	return writeTokenConfigSnapshot(label, profileDir)
+}
+
+func writeTokenConfigSnapshot(label, profileDir string) error {
 	return writeJSONFile(filepath.Join(profileDir, claudeConfigSnapshotFile), map[string]any{
 		"oauthAccount": map[string]any{"emailAddress": label},
 	})
