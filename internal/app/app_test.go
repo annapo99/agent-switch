@@ -1050,3 +1050,26 @@ func TestSaveTokenUnderAnotherLabelRenamesItsProfile(t *testing.T) {
 		t.Fatal("the same token was saved twice")
 	}
 }
+
+func TestSaveTokenRejectsOtherSecrets(t *testing.T) {
+	home := t.TempDir()
+	service := serviceWithKeychain(home, &memoryKeychain{})
+
+	for _, input := range []string{"ghp_notaclaudetoken\n", "sk-proj-notaclaudetoken\n"} {
+		if code, out := runWith(service, []string{"save", "--token", "--label", "bot"}, input); code != 2 || !strings.Contains(out, "claude setup-token") {
+			t.Fatalf("input %q code=%d out=\n%s", input, code, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude")); err == nil {
+		t.Fatal("a profile was saved")
+	}
+}
+
+func TestSaveTokenRejectsLabelThatNamesNothing(t *testing.T) {
+	home := t.TempDir()
+	service := serviceWithKeychain(home, &memoryKeychain{})
+
+	if code, out := runWith(service, []string{"save", "--token", "--label", "Unknown"}, "sk-ant-oat01-bot\n"); code != 2 || !strings.Contains(out, "--label") {
+		t.Fatalf("code=%d out=\n%s", code, out)
+	}
+}

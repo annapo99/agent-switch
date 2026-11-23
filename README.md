@@ -112,7 +112,7 @@ and organization; the name stays when the saved credentials are refreshed.
 
 A long-lived token from `claude setup-token` can be saved as a Claude profile
 without logging in through the browser. Pass the token on stdin and name the
-profile:
+profile; when you paste it into a terminal instead, the input stays hidden:
 
 ```bash
 security find-generic-password -s claude-token-bot -w | ags save --token --label bot

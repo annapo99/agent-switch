@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/annapo99/agent-switch/internal/claudebg"
 	"github.com/annapo99/agent-switch/internal/identity"
@@ -311,9 +314,8 @@ func (s *Service) Save(stdout io.Writer, stdin io.Reader, agent string, yes bool
 // from stdin, as a Claude profile named label. Saving the same label again
 // replaces that profile's token.
 func (s *Service) SaveToken(stdout, stderr io.Writer, stdin io.Reader, label string) int {
-	line, _ := bufio.NewReader(stdin).ReadString('\n')
-	token := strings.TrimSpace(line)
-	if token == "" || strings.ContainsAny(token, " \t") {
+	token := readToken(stdin, stderr)
+	if !strings.HasPrefix(token, claudeTokenPrefix) || strings.ContainsAny(token, " \t") {
 		fmt.Fprintln(stderr, "Pass the token printed by `claude setup-token` on stdin.")
 		return 2
 	}
@@ -341,6 +343,31 @@ func (s *Service) SaveToken(stdout, stderr io.Writer, stdin io.Reader, label str
 	}
 	fmt.Fprintf(stdout, "%s claude account #%d (token: %s)\n", verb, profile.Number, label)
 	return 0
+}
+
+const claudeTokenPrefix = "sk-ant-oat"
+
+func readToken(stdin io.Reader, stderr io.Writer) string {
+	file, ok := stdin.(*os.File)
+	if !ok || !term.IsTerminal(int(file.Fd())) {
+		line, _ := bufio.NewReader(stdin).ReadString('\n')
+		return strings.TrimSpace(line)
+	}
+	fd := int(file.Fd())
+	if state, err := term.GetState(fd); err == nil {
+		interrupted := make(chan os.Signal, 1)
+		signal.Notify(interrupted, os.Interrupt)
+		defer signal.Stop(interrupted)
+		go func() {
+			<-interrupted
+			_ = term.Restore(fd, state)
+			os.Exit(130)
+		}()
+	}
+	fmt.Fprint(stderr, "Token: ")
+	data, _ := term.ReadPassword(fd)
+	fmt.Fprintln(stderr)
+	return strings.TrimSpace(string(data))
 }
 
 // tokenProfile finds the saved token profile a new token replaces.
@@ -728,7 +755,7 @@ func parseTokenOptions(args []string, stderr io.Writer) (string, bool) {
 			return "", false
 		}
 	}
-	if label == "" {
+	if label == "" || strings.EqualFold(label, "unknown") {
 		fmt.Fprintln(stderr, "--token requires --label NAME")
 		return "", false
 	}
