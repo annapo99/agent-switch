@@ -810,3 +810,25 @@ func TestRenameRejectsUnknownAccountOrMissingName(t *testing.T) {
 		t.Fatalf("missing name code=%d err=%q", code, errOut)
 	}
 }
+
+func TestCodexAPIKeyProfilesStaySeparate(t *testing.T) {
+	home := t.TempDir()
+	for _, key := range []string{"key-a", "key-b"} {
+		writeJSONFixture(t, home, ".codex/auth.json", map[string]any{"OPENAI_API_KEY": key})
+		if code, out, _ := runService(t, home, []string{"save", "--agent", "codex", "--yes"}, ""); code != 0 || !strings.Contains(out, "Saved codex account") {
+			t.Fatalf("save %s code=%d out=\n%s", key, code, out)
+		}
+	}
+	writeJSONFixture(t, home, ".codex/auth.json", map[string]any{"OPENAI_API_KEY": "key-c"})
+
+	if code, _, _ := runService(t, home, []string{"list", "--agent", "codex"}, ""); code != 0 {
+		t.Fatalf("list code = %d", code)
+	}
+
+	for number, key := range map[string]string{"1": "key-a", "2": "key-b"} {
+		snapshot := readJSONFixture(t, home, ".agent-switch/profiles/codex/"+number+"/files/.codex/auth.json")
+		if snapshot["OPENAI_API_KEY"] != key {
+			t.Fatalf("profile %s = %#v", number, snapshot)
+		}
+	}
+}

@@ -272,3 +272,23 @@ func TestRemoveProfileDeletesProfileDirectory(t *testing.T) {
 		t.Fatal("expected second remove to return false")
 	}
 }
+
+func TestFindDuplicateKeepsProfilesWithoutReadableNameApart(t *testing.T) {
+	s := New(t.TempDir())
+	for _, fingerprint := range []string{"key-a", "key-b"} {
+		if _, err := s.CreateProfile(active("codex", "unknown", fingerprint, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next := active("codex", "unknown", "key-c", nil)
+
+	if duplicate, ok := s.FindDuplicate(next); ok {
+		t.Fatalf("unexpected duplicate = %+v", duplicate)
+	}
+	if removed := s.RemoveDuplicateProfiles(next, 1); len(removed) != 0 {
+		t.Fatalf("removed = %+v", removed)
+	}
+	if profiles := s.ListProfiles("codex"); len(profiles) != 2 {
+		t.Fatalf("profiles = %+v", profiles)
+	}
+}

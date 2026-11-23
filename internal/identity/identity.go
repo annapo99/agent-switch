@@ -45,7 +45,7 @@ func SameLogicalAccount(profile model.Profile, account model.ActiveAccount) bool
 		return false
 	}
 	if profile.Agent != "claude" {
-		return normalized(profile.Label) != "" && normalized(profile.Label) == normalized(account.Label)
+		return SameLabel(profile.Label, account.Label)
 	}
 
 	profileAccount := normalized(profile.Metadata.String(model.MetadataAccountUUID))
@@ -59,12 +59,17 @@ func SameLogicalAccount(profile model.Profile, account model.ActiveAccount) bool
 	profileName := normalized(profile.Metadata.String(model.MetadataOrganizationName))
 	accountName := normalized(account.Metadata.String(model.MetadataOrganizationName))
 	if profileName != "" && accountName != "" {
-		return normalized(profile.Label) == normalized(account.Label) && profileName == accountName
+		return SameLabel(profile.Label, account.Label) && profileName == accountName
 	}
 	if profileOrg != "" || accountOrg != "" || profileName != "" || accountName != "" {
 		return false
 	}
-	return normalized(profile.Label) != "" && normalized(profile.Label) == normalized(account.Label)
+	return SameLabel(profile.Label, account.Label)
+}
+
+func SameLabel(left, right string) bool {
+	label := normalized(left)
+	return label != "" && label != "unknown" && label == normalized(right)
 }
 
 func normalized(value string) string {

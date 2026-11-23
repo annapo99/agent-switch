@@ -82,3 +82,23 @@ func TestOrganizationKeysOrdersNameBeforeUUID(t *testing.T) {
 		t.Fatalf("keys = %#v", keys)
 	}
 }
+
+func TestSameLogicalAccountIgnoresUnknownLabels(t *testing.T) {
+	for _, agent := range []string{"codex", "claude"} {
+		profile := model.Profile{Agent: agent, Label: "unknown"}
+		account := model.ActiveAccount{Agent: agent, Label: "Unknown"}
+		if SameLogicalAccount(profile, account) {
+			t.Fatalf("%s profiles without a readable name matched each other", agent)
+		}
+	}
+}
+
+func TestSameLogicalAccountIgnoresUnknownLabelsWithinAnOrganizationName(t *testing.T) {
+	metadata := model.Metadata{model.MetadataOrganizationName: "Example Team"}
+	profile := model.Profile{Agent: "claude", Label: "unknown", Metadata: metadata}
+	account := model.ActiveAccount{Agent: "claude", Label: "unknown", Metadata: metadata}
+
+	if SameLogicalAccount(profile, account) {
+		t.Fatal("logins without a readable name matched by organization name alone")
+	}
+}
