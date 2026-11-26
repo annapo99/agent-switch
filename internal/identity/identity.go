@@ -101,6 +101,11 @@ func SameLogicalAccount(profile model.Profile, account model.ActiveAccount) bool
 		return false
 	}
 	if profile.Agent != "claude" {
+		profileID := normalized(profile.Metadata.String(model.MetadataCodexAccountID))
+		accountID := normalized(account.Metadata.String(model.MetadataCodexAccountID))
+		if profileID != "" && accountID != "" && profileID != accountID {
+			return false
+		}
 		return SameLabel(profile.Label, account.Label)
 	}
 	profileKind := profile.Metadata.String(model.MetadataCredentialKind)

@@ -11,6 +11,21 @@ import (
 	"github.com/annapo99/agent-switch/internal/model"
 )
 
+func withCodexAccountID(profile model.Profile, profileDir string) model.Profile {
+	if profile.Agent != "codex" || profile.Metadata.String(model.MetadataCodexAccountID) != "" {
+		return profile
+	}
+	data, err := os.ReadFile(filepath.Join(profileDir, "files", ".codex", "auth.json"))
+	if err != nil {
+		return profile
+	}
+	if id := identity.CodexAccountID(data); id != "" {
+		profile.Metadata = cloneMetadata(profile.Metadata)
+		profile.Metadata[model.MetadataCodexAccountID] = id
+	}
+	return profile
+}
+
 func withClaudeCredentialKind(profile model.Profile, profileDir string) model.Profile {
 	if profile.Agent != "claude" {
 		return profile

@@ -131,7 +131,7 @@ func (s *Store) ListProfiles(agent string) []model.Profile {
 				if hydrated, hydrateErr := hydrateClaudeIdentity(profile, profileDir); hydrateErr == nil {
 					profile = hydrated
 				}
-				profiles = append(profiles, withClaudeCredentialKind(profile, profileDir))
+				profiles = append(profiles, withCodexAccountID(withClaudeCredentialKind(profile, profileDir), profileDir))
 			}
 		}
 	}

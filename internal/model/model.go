@@ -6,6 +6,7 @@ const (
 	MetadataOrganizationName = "organization_name"
 	MetadataCredentialKind   = "credential_kind"
 	MetadataTokenID          = "token_id"
+	MetadataCodexAccountID   = "codex_account_id"
 )
 
 type Metadata map[string]any

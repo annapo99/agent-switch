@@ -202,10 +202,19 @@ func (p *FileAuthProvider) Detect(home string) (model.ActiveAccount, bool) {
 }
 
 func (p *FileAuthProvider) SaveSnapshot(home string, account model.ActiveAccount, profileDir string) error {
+	contents := map[string][]byte{}
 	for _, rel := range account.AuthFiles {
-		src := filepath.Join(home, filepath.FromSlash(rel))
-		dst := filepath.Join(profileDir, "files", filepath.FromSlash(rel))
-		if err := copyFile(src, dst); err != nil {
+		data, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(rel)))
+		if err != nil {
+			return err
+		}
+		contents[rel] = data
+	}
+	if account.Fingerprint != "" && p.fingerprintOf(contents) != account.Fingerprint {
+		return errors.New("credentials changed while saving the account; run the command again")
+	}
+	for rel, data := range contents {
+		if err := fsutil.WriteFile(filepath.Join(profileDir, "files", filepath.FromSlash(rel)), data); err != nil {
 			return err
 		}
 	}
@@ -263,13 +272,25 @@ func (p *FileAuthProvider) extractLabel(home string, rels []string) string {
 }
 
 func (p *FileAuthProvider) fingerprint(home string, rels []string) string {
+	contents := map[string][]byte{}
+	for _, rel := range rels {
+		data, _ := os.ReadFile(filepath.Join(home, filepath.FromSlash(rel)))
+		contents[rel] = data
+	}
+	return p.fingerprintOf(contents)
+}
+
+func (p *FileAuthProvider) fingerprintOf(contents map[string][]byte) string {
+	rels := make([]string, 0, len(contents))
+	for rel := range contents {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels)
 	hash := sha256.New()
 	hash.Write([]byte(p.agent))
-	sort.Strings(rels)
 	for _, rel := range rels {
 		hash.Write([]byte(rel))
-		data, _ := os.ReadFile(filepath.Join(home, filepath.FromSlash(rel)))
-		hash.Write(data)
+		hash.Write(contents[rel])
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }
@@ -551,7 +572,16 @@ func NewCodexProvider() *CodexProvider {
 func (p *CodexProvider) Agent() string       { return "codex" }
 func (p *CodexProvider) DisplayName() string { return "Codex" }
 func (p *CodexProvider) Detect(home string) (model.ActiveAccount, bool) {
-	return p.file.Detect(home)
+	account, ok := p.file.Detect(home)
+	if !ok {
+		return account, false
+	}
+	if data, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json")); err == nil {
+		if id := identity.CodexAccountID(data); id != "" {
+			account.Metadata[model.MetadataCodexAccountID] = id
+		}
+	}
+	return account, true
 }
 func (p *CodexProvider) SaveSnapshot(home string, account model.ActiveAccount, profileDir string) error {
 	return p.file.SaveSnapshot(home, account, profileDir)

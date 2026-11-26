@@ -1387,3 +1387,27 @@ func TestUseRespectsAccountOverridesInTheEnvironment(t *testing.T) {
 		t.Fatalf("token override code=%d out=\n%s", code, out)
 	}
 }
+
+func TestCodexWorkspacesOfOneEmailStayApart(t *testing.T) {
+	home := t.TempDir()
+	signIn := func(workspace, token string) {
+		writeJSONFixture(t, home, ".codex/auth.json", map[string]any{"email": "same@example.com", "tokens": map[string]any{"account_id": workspace, "access_token": token}})
+	}
+	signIn("personal", "personal-token")
+	if code, out, _ := runService(t, home, []string{"save", "--agent", "codex", "--yes"}, ""); code != 0 {
+		t.Fatalf("save personal code=%d out=\n%s", code, out)
+	}
+
+	signIn("business", "business-token")
+	runService(t, home, []string{"list"}, "")
+	saved := readJSONFixture(t, home, ".agent-switch/profiles/codex/1/files/.codex/auth.json")
+	if saved["tokens"].(map[string]any)["account_id"] != "personal" {
+		t.Fatalf("the business workspace overwrote the personal profile: %#v", saved)
+	}
+	if code, out, _ := runService(t, home, []string{"save", "--agent", "codex", "--yes"}, ""); code != 0 || !strings.Contains(out, "Saved codex account #2") {
+		t.Fatalf("save business code=%d out=\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/codex/1")); err != nil {
+		t.Fatalf("the personal profile was removed: %v", err)
+	}
+}

@@ -505,3 +505,19 @@ func TestListProfilesDropsAccountIdentityFromTokenProfiles(t *testing.T) {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 }
+
+func TestListProfilesReadsTheCodexWorkspaceOfOldProfiles(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/codex/1")
+	writeStoreJSON(t, filepath.Join(profileDir, "manifest.json"), map[string]any{"agent": "codex", "number": 1, "label": "a@example.com"})
+	writeStoreJSON(t, filepath.Join(profileDir, "files/.codex/auth.json"), map[string]any{"tokens": map[string]any{"account_id": "personal"}})
+	s := New(home)
+
+	if got := s.ListProfiles("codex")[0].Metadata.String(model.MetadataCodexAccountID); got != "personal" {
+		t.Fatalf("workspace = %q", got)
+	}
+	work := active("codex", "a@example.com", "work-login", model.Metadata{model.MetadataCodexAccountID: "business"})
+	if duplicate, ok := s.FindDuplicate(work); ok {
+		t.Fatalf("the business workspace matched the personal profile: %+v", duplicate)
+	}
+}

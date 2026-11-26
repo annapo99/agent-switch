@@ -905,3 +905,22 @@ func TestKeychainSaveFailsWhenTheLoginCannotBeRead(t *testing.T) {
 		t.Fatal("a login that could not be read was saved as nothing")
 	}
 }
+
+func TestFileSnapshotRefusesCredentialsThatChangedSinceDetection(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".codex/auth.json", map[string]any{"email": "a@example.com", "tokens": map[string]any{"account_id": "one"}})
+	p := NewCodexProvider()
+	account, ok := p.Detect(home)
+	if !ok || account.Metadata.String(model.MetadataCodexAccountID) != "one" {
+		t.Fatalf("account = %#v", account)
+	}
+	writeJSON(t, home, ".codex/auth.json", map[string]any{"email": "b@example.com", "tokens": map[string]any{"account_id": "two"}})
+
+	profileDir := filepath.Join(home, ".agent-switch/profiles/codex/1")
+	if err := p.SaveSnapshot(home, account, profileDir); err == nil {
+		t.Fatal("credentials that changed after detection were saved under the detected account")
+	}
+	if _, err := os.Stat(filepath.Join(profileDir, "files")); err == nil {
+		t.Fatal("a snapshot was written")
+	}
+}
