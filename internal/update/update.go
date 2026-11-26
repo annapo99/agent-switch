@@ -286,7 +286,7 @@ func readFreshCache(cfg Config) (cacheFile, bool) {
 
 func writeCache(cfg Config, version string) error {
 	path := cachePath(cfg.Home)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cacheFile{Version: version, CheckedAt: cfg.Now()}, "", "  ")

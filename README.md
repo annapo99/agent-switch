@@ -54,8 +54,11 @@ To install somewhere else, run `AGS_INSTALL_DIR=/usr/local/bin sh install.sh`.
 With Go installed, `go install github.com/annapo99/agent-switch/cmd/ags@latest`
 also works.
 
-To verify the installer before running it, download `checksums.txt` from the
-same release and run `grep ' install.sh$' checksums.txt | shasum -a 256 -c -`.
+`checksums.txt` comes from the same release, so it catches a broken download
+but not a replaced release. To check that a file was built by this
+repository's release workflow, run
+`gh attestation verify install.sh --repo annapo99/agent-switch` (releases from
+v0.3.1 on). `ags update` checks `checksums.txt` only.
 
 ## Update
 
@@ -203,8 +206,13 @@ available.
   `auth.json`, `keychain.json`, `.env`, or key files.
 - This repository's `.gitignore` blocks those common local credential paths.
 
-Use full-disk encryption and normal OS account protections if you save agent
-profiles on a shared machine.
+Saved profiles hold the refresh token of every saved account in plain JSON
+files, and `ags` keeps inactive ones refreshed, so a copy of
+`~/.agent-switch` keeps working. Use full-disk encryption, keep the folder
+out of unencrypted backups (`tmutil addexclusion ~/.agent-switch`), and
+consider denying coding agents read access to it, for example with
+`"permissions": {"deny": ["Read(~/.agent-switch/**)"]}` in Claude Code
+settings.
 
 ## Development
 
@@ -222,8 +230,9 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 
-The release workflow builds signed-by-checksum release archives and publishes
-them as the latest GitHub Release.
+The release workflow builds the release archives, records their build
+provenance with GitHub artifact attestations, and publishes them as the
+latest GitHub Release.
 
 ## Roadmap
 
