@@ -433,6 +433,7 @@ func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, d
 	if err != nil {
 		return err
 	}
+	secret = identity.ClaudeLoginCredentials(secret)
 	if rollbackItem != nil {
 		secret = identity.WithClaudeMCPLogins(secret, rollbackItem.Secret)
 	}

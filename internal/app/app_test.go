@@ -1174,3 +1174,19 @@ func TestRecordUsageSavesStatusLineUsageForTheActiveToken(t *testing.T) {
 		t.Fatal("token usage was recorded into the browser profile")
 	}
 }
+
+func TestOldProfileMCPLoginsAreNeverRestored(t *testing.T) {
+	home := t.TempDir()
+	service, keychain, _ := saveBrowserLoginAndTokenProfile(t, home)
+	snapshotPath := ".agent-switch/profiles/claude/2/keychain.json"
+	snapshot := readJSONFixture(t, home, snapshotPath)
+	snapshot["secret"] = strings.TrimSuffix(snapshot["secret"].(string), "}") + `,"mcpOAuth":{"notion":{"refreshToken":"stale"}}}`
+	writeJSONFixture(t, home, snapshotPath, snapshot)
+
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 {
+		t.Fatalf("use token code=%d out=\n%s", code, out)
+	}
+	if !strings.Contains(keychain.item.Secret, "sk-ant-oat01-bot") || strings.Contains(keychain.item.Secret, "mcpOAuth") {
+		t.Fatalf("keychain = %s", keychain.item.Secret)
+	}
+}

@@ -772,7 +772,7 @@ func TestSecurityKeychainReadsBackNonASCIISecrets(t *testing.T) {
 
 func TestKeychainApplyRestoresSnapshotThatWasSavedAsHex(t *testing.T) {
 	home := t.TempDir()
-	secret := "{\"claudeAiOauth\":{\"accessToken\":\"access\",\"refreshToken\":\"refresh\"},\"mcpOAuth\":{\"caf\u00e9\":{}}}"
+	secret := "{\"claudeAiOauth\":{\"accessToken\":\"access\",\"refreshToken\":\"refresh\",\"subscriptionType\":\"caf\u00e9\"}}"
 	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
 	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
 		"service": ClaudeKeychainService, "account": "annapo", "secret": hex.EncodeToString([]byte(secret)),
@@ -786,5 +786,30 @@ func TestKeychainApplyRestoresSnapshotThatWasSavedAsHex(t *testing.T) {
 
 	if keychain.item == nil || keychain.item.Secret != secret {
 		t.Fatalf("keychain = %#v", keychain.item)
+	}
+}
+
+func TestKeychainApplyNeverRestoresSavedMCPLogins(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": ClaudeKeychainService, "account": "annapo",
+		"secret": `{"claudeAiOauth":{"accessToken":"saved"},"mcpOAuth":{"notion":{"refreshToken":"stale"}}}`,
+	})
+	for name, current := range map[string]*KeychainItem{
+		"empty keychain":         nil,
+		"login without MCP":      {Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"current"}}`},
+		"login with MCP":         {Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"current"},"mcpOAuth":{"notion":{"refreshToken":"fresh"}}}`},
+		"unreadable credentials": {Account: "annapo", Secret: "not json"},
+	} {
+		keychain := &fakeKeychain{item: current}
+		if err := NewClaudeProvider(keychain).ApplySnapshot(home, profileDir); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		secret := keychain.item.Secret
+		wantFresh := name == "login with MCP"
+		if !strings.Contains(secret, `"accessToken":"saved"`) || strings.Contains(secret, "stale") || strings.Contains(secret, "fresh") != wantFresh {
+			t.Fatalf("%s: keychain = %s", name, secret)
+		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/annapo99/agent-switch/internal/identity"
@@ -432,5 +433,34 @@ func TestListProfilesFingerprintsTheSavedAccountLogin(t *testing.T) {
 	holder, ok := New(home).CredentialsHolder(current)
 	if !ok || holder.Number != 1 {
 		t.Fatalf("holder = %+v ok=%v", holder, ok)
+	}
+}
+
+func TestListProfilesRemovesMCPLoginsFromOldSnapshots(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeStoreJSON(t, filepath.Join(profileDir, "manifest.json"), map[string]any{"agent": "claude", "number": 1, "label": "bot"})
+	writeStoreJSON(t, filepath.Join(profileDir, "keychain.json"), map[string]any{
+		"service": "Claude Code-credentials",
+		"account": "annapo",
+		"secret":  `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","refreshToken":null,"scopes":["user:inference"]},"mcpOAuth":{"notion":{"refreshToken":"old"}}}`,
+	})
+
+	New(home).ListProfiles("claude")
+
+	path := filepath.Join(profileDir, "keychain.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot map[string]string
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(snapshot["secret"], "mcpOAuth") || !strings.Contains(snapshot["secret"], "sk-ant-oat01-test") || snapshot["account"] != "annapo" || snapshot["service"] != "Claude Code-credentials" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("snapshot info=%v err=%v", info, err)
 	}
 }

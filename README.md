@@ -165,7 +165,9 @@ Claude Code keeps the logins of MCP servers that use OAuth in the same
 Keychain item as the account login. Those logins belong to the machine, not
 to a Claude account: profiles do not save them, and switching keeps the ones
 Claude Code currently has, so an MCP server stays connected on every profile.
-On the `~/.claude/.credentials.json` fallback the file is switched as a whole.
+An MCP server connected while using one account, such as a work account, is
+therefore also available to sessions of every other profile. On the
+`~/.claude/.credentials.json` fallback the file is switched as a whole.
 
 Claude usage metadata is enriched from saved Claude OAuth snapshots when a
 valid access or refresh token is available. Codex usage metadata is enriched

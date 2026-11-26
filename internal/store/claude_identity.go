@@ -17,6 +17,9 @@ func withClaudeCredentialKind(profile model.Profile, profileDir string) model.Pr
 	credentials := claudeCredentials(profileDir)
 	if secret := claudeKeychainSecret(profileDir); secret != "" {
 		profile.Fingerprint = identity.ClaudeKeychainFingerprint(secret)
+		if login := identity.ClaudeLoginCredentials(secret); login != secret {
+			_ = rewriteClaudeKeychainSecret(profileDir, login)
+		}
 	}
 	delete(profile.Metadata, model.MetadataCredentialKind)
 	delete(profile.Metadata, model.MetadataTokenID)
@@ -41,6 +44,20 @@ func claudeKeychainSecret(profileDir string) string {
 		return ""
 	}
 	return snapshot.Secret
+}
+
+func rewriteClaudeKeychainSecret(profileDir, secret string) error {
+	path := filepath.Join(profileDir, "keychain.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return err
+	}
+	snapshot["secret"] = secret
+	return writeJSONAtomic(path, snapshot)
 }
 
 func claudeCredentials(profileDir string) string {
@@ -96,12 +113,16 @@ func copyStringMetadata(metadata model.Metadata, source map[string]any, sourceKe
 }
 
 func writeProfileAtomic(path string, profile model.Profile) error {
-	data, err := json.MarshalIndent(profile, "", "  ")
+	return writeJSONAtomic(path, profile)
+}
+
+func writeJSONAtomic(path string, payload any) error {
+	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".manifest-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return err
 	}
