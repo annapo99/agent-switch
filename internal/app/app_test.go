@@ -1272,3 +1272,90 @@ func TestUseRefusesAProfileWithoutSavedCredentials(t *testing.T) {
 		t.Fatalf("code=%d out=\n%s", code, out)
 	}
 }
+
+func TestRotatedLoginNeverLandsInTheProfileTheLaggingConfigNames(t *testing.T) {
+	home := t.TempDir()
+	keychain := &memoryKeychain{}
+	service := serviceWithKeychain(home, keychain)
+	secrets := map[string]string{
+		"team-org":       `{"claudeAiOauth":{"accessToken":"team-access","refreshToken":"team-refresh"}}`,
+		"enterprise-org": `{"claudeAiOauth":{"accessToken":"enterprise-access","refreshToken":"enterprise-refresh"}}`,
+	}
+	owners := map[string]string{"team-access": "team-org", "enterprise-access": "enterprise-org", "enterprise-access-2": "enterprise-org", "team-access-2": "team-org"}
+	lookups := 0
+	service.claudeIdentity = func(token string) (provider.ClaudeLoginIdentity, error) {
+		lookups++
+		return provider.ClaudeLoginIdentity{AccountUUID: "account-1", OrganizationUUID: owners[token]}, nil
+	}
+	signIn := func(org string) {
+		writeJSONFixture(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{
+			"emailAddress": "same@example.com", "accountUuid": "account-1", "organizationUuid": org,
+		}})
+	}
+	for _, org := range []string{"team-org", "enterprise-org"} {
+		keychain.item = &provider.KeychainItem{Account: "annapo", Secret: secrets[org]}
+		signIn(org)
+		if code, out := runWith(service, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+			t.Fatalf("save %s code=%d out=\n%s", org, code, out)
+		}
+	}
+	teamSnapshot := func() any {
+		return readJSONFixture(t, home, ".agent-switch/profiles/claude/1/keychain.json")["secret"]
+	}
+
+	signIn("team-org")
+	keychain.item.Secret = `{"claudeAiOauth":{"accessToken":"enterprise-access-2","refreshToken":"enterprise-refresh-2"}}`
+	runWith(service, []string{"list"}, "")
+	if got := teamSnapshot(); got != secrets["team-org"] {
+		t.Fatalf("team profile now holds %v", got)
+	}
+	if code, out := runWith(service, []string{"save", "--agent", "claude", "--yes"}, ""); code != 1 || !strings.Contains(out, "another account or organization") {
+		t.Fatalf("save of a mismatched login code=%d out=\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/3")); err == nil {
+		t.Fatal("the mismatched login was saved as a new profile")
+	}
+
+	keychain.item.Secret = `{"claudeAiOauth":{"accessToken":"team-access-2","refreshToken":"team-refresh-2"}}`
+	runWith(service, []string{"list"}, "")
+	if got, _ := teamSnapshot().(string); !strings.Contains(got, "team-access-2") || lookups == 0 {
+		t.Fatalf("a verified rotation was not saved: %v (lookups %d)", got, lookups)
+	}
+}
+
+func TestUseOnTheActiveAccountLeavesSessionsAlone(t *testing.T) {
+	home := t.TempDir()
+	saveTwoClaudeFileAccounts(t, home)
+	service := New(home)
+	calls := 0
+	service.claudeBackground = func() (claudebg.Result, error) {
+		calls++
+		return claudebg.Result{}, nil
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := service.Run([]string{"use", "2"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 || calls != 0 || !strings.Contains(stdout.String(), "Already using claude account #2.") {
+		t.Fatalf("code=%d calls=%d out=\n%s", code, calls, stdout.String())
+	}
+}
+
+func TestSaveRefusesALoginThatBelongsToAnotherOrganization(t *testing.T) {
+	home := t.TempDir()
+	keychain := &memoryKeychain{item: &provider.KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"work-access","refreshToken":"work-refresh"}}`}}
+	service := serviceWithKeychain(home, keychain)
+	service.claudeIdentity = func(string) (provider.ClaudeLoginIdentity, error) {
+		return provider.ClaudeLoginIdentity{AccountUUID: "account-1", OrganizationUUID: "work-org"}, nil
+	}
+	writeJSONFixture(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{
+		"emailAddress": "same@example.com", "accountUuid": "account-1", "organizationUuid": "personal-org", "organizationName": "Personal",
+	}})
+
+	if code, out := runWith(service, []string{"save", "--agent", "claude", "--yes"}, ""); code != 1 || !strings.Contains(out, "another account or organization") {
+		t.Fatalf("code=%d out=\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/1")); err == nil {
+		t.Fatal("the work login was saved under the personal organization")
+	}
+}

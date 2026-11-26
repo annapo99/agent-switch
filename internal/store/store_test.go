@@ -483,3 +483,25 @@ func TestLockKeepsOneAgsCommandAtATime(t *testing.T) {
 	}
 	again()
 }
+
+func TestListProfilesDropsAccountIdentityFromTokenProfiles(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeStoreJSON(t, filepath.Join(profileDir, "manifest.json"), map[string]any{
+		"agent": "claude", "number": 1, "label": "bot",
+		"metadata": map[string]any{
+			model.MetadataAccountUUID:      "work-account",
+			model.MetadataOrganizationUUID: "work-org",
+			model.MetadataOrganizationName: "Work",
+		},
+	})
+	writeStoreJSON(t, filepath.Join(profileDir, "keychain.json"), map[string]any{
+		"secret": `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","refreshToken":null,"scopes":["user:inference"]}}`,
+	})
+
+	metadata := New(home).ListProfiles("claude")[0].Metadata
+
+	if metadata.String(model.MetadataAccountUUID) != "" || metadata.String(model.MetadataOrganizationUUID) != "" || metadata.String(model.MetadataOrganizationName) != "" || metadata.String(model.MetadataTokenID) == "" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+}

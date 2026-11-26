@@ -29,6 +29,9 @@ func withClaudeCredentialKind(profile model.Profile, profileDir string) model.Pr
 	}
 	if tokenID := identity.ClaudeTokenID(credentials); tokenID != "" {
 		profile.Metadata[model.MetadataTokenID] = tokenID
+		delete(profile.Metadata, model.MetadataAccountUUID)
+		delete(profile.Metadata, model.MetadataOrganizationUUID)
+		delete(profile.Metadata, model.MetadataOrganizationName)
 	}
 	return profile
 }

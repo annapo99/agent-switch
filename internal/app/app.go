@@ -39,6 +39,7 @@ type Service struct {
 	// respawnClaudeSelf restarts the session ags runs in once the rest have
 	// moved. Nil wherever claudeBackground is.
 	respawnClaudeSelf func(id string) error
+	claudeIdentity    func(accessToken string) (provider.ClaudeLoginIdentity, error)
 }
 
 var shouldColor = func(stdout any) bool {
@@ -90,6 +91,7 @@ func NewWithUsageProviderAndVersion(home string, usageProvider usage.Provider, v
 			return claudebg.Follow(claudebg.CLI, os.Getenv("CLAUDE_CODE_SESSION_ID"))
 		}
 		service.respawnClaudeSelf = claudebg.RespawnDetached
+		service.claudeIdentity = provider.FetchClaudeLoginIdentity
 	}
 	return service
 }
@@ -233,6 +235,10 @@ func (s *Service) Save(stdout io.Writer, stdin io.Reader, agent string, yes bool
 			}
 			fmt.Fprintln(stdout)
 			if s.needsUpdate(item.account, item.duplicate) {
+				if err := s.verifyLogin(detectedAccount{provider: item.provider, account: item.account}); err != nil {
+					fmt.Fprintln(stdout, err)
+					return 1
+				}
 				profile, removed, err := s.updateAccount(item.provider, item.account, item.duplicate)
 				if err != nil {
 					fmt.Fprintln(stdout, err)
@@ -251,6 +257,12 @@ func (s *Service) Save(stdout io.Writer, stdin io.Reader, agent string, yes bool
 		return 0
 	}
 
+	for _, item := range newItems {
+		if err := s.verifyLogin(detectedAccount{provider: item.provider, account: item.account}); err != nil {
+			fmt.Fprintln(stdout, err)
+			return 1
+		}
+	}
 	reader := bufio.NewReader(stdin)
 	if len(newItems) == 1 {
 		item := newItems[0]
@@ -432,9 +444,14 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 		expecter.ExpectCurrentLogin(s.home)
 	}
 	s.syncActiveProfiles(profile.Agent)
-	if len(s.store.ProfilesByNumber(profile.Number, profile.Agent)) == 0 {
+	current := s.store.ProfilesByNumber(profile.Number, profile.Agent)
+	if len(current) == 0 {
 		fmt.Fprintf(stdout, "No saved account matches #%d.\n", number)
 		return 1
+	}
+	if provider.MatchesProfile(s.home, current[0]) {
+		fmt.Fprintf(stdout, "Already using %s account #%d.\n", profile.Agent, profile.Number)
+		return 0
 	}
 	if err := provider.ApplySnapshot(s.home, s.store.ProfileDir(profile.Agent, profile.Number)); err != nil {
 		fmt.Fprintln(stdout, err)
@@ -665,11 +682,23 @@ func (s *Service) activeClaudeTokenID() string {
 func (s *Service) syncActiveProfiles(agent string) {
 	for _, item := range s.detectedAccounts(agent) {
 		duplicate, ok := s.store.FindDuplicate(item.account)
-		if !ok || !s.needsUpdate(item.account, duplicate) {
+		if !ok || !s.needsUpdate(item.account, duplicate) || s.verifyLogin(item) != nil {
 			continue
 		}
 		_, _, _ = s.updateAccount(item.provider, item.account, duplicate)
 	}
+}
+
+func (s *Service) verifyLogin(item detectedAccount) error {
+	claude, ok := item.provider.(*provider.ClaudeProvider)
+	if !ok || s.claudeIdentity == nil || item.account.Metadata.String(model.MetadataCredentialKind) == identity.CredentialKindToken {
+		return nil
+	}
+	return claude.VerifyLogin(s.home, provider.ActiveAccountIdentity{
+		Fingerprint:      item.account.Fingerprint,
+		AccountUUID:      item.account.Metadata.String(model.MetadataAccountUUID),
+		OrganizationUUID: item.account.Metadata.String(model.MetadataOrganizationUUID),
+	}, s.claudeIdentity, time.Now().UnixMilli())
 }
 
 func (s *Service) needsUpdate(account model.ActiveAccount, duplicate model.Profile) bool {
