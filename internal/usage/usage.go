@@ -2,9 +2,7 @@ package usage
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -28,7 +26,7 @@ const ClaudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
 const ClaudeOAuthBetaHeader = "oauth-2025-04-20"
 const ClaudeOAuthTokenURL = "https://platform.claude.com/v1/oauth/token"
 const ClaudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-const claudeKeychainService = "Claude Code-credentials"
+const claudeKeychainService = identity.ClaudeKeychainService
 const oauthExpiryBufferSeconds = 5 * 60
 const claudeUsageCacheFile = "usage.json"
 const ClaudeMessagesURL = "https://api.anthropic.com/v1/messages"
@@ -640,11 +638,11 @@ func persistClaudeCredentials(profileDir, oldCredentials, newCredentials string)
 	if _, ok := snapshot["secret"]; !ok {
 		return nil
 	}
-	snapshot["secret"] = newCredentials
+	snapshot["secret"] = identity.ClaudeLoginCredentials(newCredentials)
 	if err := writeJSONFile(snapshotPath, snapshot); err != nil {
 		return err
 	}
-	return updateClaudeProfileFingerprint(profileDir, claudeKeychainFingerprint(oldCredentials), claudeKeychainFingerprint(newCredentials))
+	return updateClaudeProfileFingerprint(profileDir, identity.ClaudeKeychainFingerprint(oldCredentials), identity.ClaudeKeychainFingerprint(newCredentials))
 }
 
 func updateClaudeProfileFingerprint(profileDir, oldFingerprint, newFingerprint string) error {
@@ -656,11 +654,6 @@ func updateClaudeProfileFingerprint(profileDir, oldFingerprint, newFingerprint s
 	}
 	manifest["fingerprint"] = newFingerprint
 	return writeJSONFile(manifestPath, manifest)
-}
-
-func claudeKeychainFingerprint(credentials string) string {
-	sum := sha256.Sum256([]byte("claude:" + claudeKeychainService + ":" + credentials))
-	return hex.EncodeToString(sum[:])
 }
 
 func writeJSONFile(path string, payload any) error {

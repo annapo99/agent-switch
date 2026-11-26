@@ -15,6 +15,9 @@ func withClaudeCredentialKind(profile model.Profile, profileDir string) model.Pr
 		return profile
 	}
 	credentials := claudeCredentials(profileDir)
+	if secret := claudeKeychainSecret(profileDir); secret != "" {
+		profile.Fingerprint = identity.ClaudeKeychainFingerprint(secret)
+	}
 	delete(profile.Metadata, model.MetadataCredentialKind)
 	delete(profile.Metadata, model.MetadataTokenID)
 	if kind := identity.ClaudeCredentialKind(credentials); kind != "" {
@@ -26,14 +29,23 @@ func withClaudeCredentialKind(profile model.Profile, profileDir string) model.Pr
 	return profile
 }
 
+func claudeKeychainSecret(profileDir string) string {
+	data, err := os.ReadFile(filepath.Join(profileDir, "keychain.json"))
+	if err != nil {
+		return ""
+	}
+	var snapshot struct {
+		Secret string `json:"secret"`
+	}
+	if json.Unmarshal(data, &snapshot) != nil {
+		return ""
+	}
+	return snapshot.Secret
+}
+
 func claudeCredentials(profileDir string) string {
-	if data, err := os.ReadFile(filepath.Join(profileDir, "keychain.json")); err == nil {
-		var snapshot struct {
-			Secret string `json:"secret"`
-		}
-		if json.Unmarshal(data, &snapshot) == nil && snapshot.Secret != "" {
-			return snapshot.Secret
-		}
+	if secret := claudeKeychainSecret(profileDir); secret != "" {
+		return secret
 	}
 	data, err := os.ReadFile(filepath.Join(profileDir, "files", ".claude", ".credentials.json"))
 	if err != nil {

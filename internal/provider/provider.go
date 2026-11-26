@@ -21,7 +21,7 @@ import (
 	"github.com/annapo99/agent-switch/internal/model"
 )
 
-const ClaudeKeychainService = "Claude Code-credentials"
+const ClaudeKeychainService = identity.ClaudeKeychainService
 const claudeConfigSnapshotFile = "config.json"
 
 // claudeTokenLifetime is how long a `claude setup-token` token stays valid.
@@ -280,7 +280,7 @@ func (p *ClaudeProvider) Detect(home string) (model.ActiveAccount, bool) {
 			Agent:       "claude",
 			DisplayName: "Claude",
 			Label:       p.keychainLabel(home, item),
-			Fingerprint: claudeKeychainFingerprint(item.Secret),
+			Fingerprint: identity.ClaudeKeychainFingerprint(item.Secret),
 			Source:      "Keychain: " + ClaudeKeychainService,
 			AuthFiles:   []string{"keychain:" + ClaudeKeychainService},
 			Metadata:    metadata,
@@ -320,7 +320,7 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 		if item == nil {
 			return nil
 		}
-		if claudeKeychainFingerprint(item.Secret) != account.Fingerprint {
+		if identity.ClaudeKeychainFingerprint(item.Secret) != account.Fingerprint {
 			return errors.New("credentials changed while saving the Claude account; run the command again")
 		}
 		if err := os.MkdirAll(profileDir, 0o700); err != nil {
@@ -329,7 +329,7 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 		data, err := json.MarshalIndent(map[string]string{
 			"service": ClaudeKeychainService,
 			"account": item.Account,
-			"secret":  item.Secret,
+			"secret":  identity.ClaudeLoginCredentials(item.Secret),
 		}, "", "  ")
 		if err != nil {
 			return err
@@ -365,7 +365,7 @@ func (p *ClaudeProvider) TokenAccount(home, label, token string, now time.Time) 
 		Agent:       "claude",
 		DisplayName: "Claude",
 		Label:       label,
-		Fingerprint: claudeKeychainFingerprint(string(secret)),
+		Fingerprint: identity.ClaudeKeychainFingerprint(string(secret)),
 		Source:      "Token: claude setup-token",
 		AuthFiles:   []string{"keychain:" + ClaudeKeychainService},
 		Metadata:    tokenMetadata(string(secret)),
@@ -394,11 +394,6 @@ func writeTokenConfigSnapshot(label, profileDir string) error {
 	return writeJSONFile(filepath.Join(profileDir, claudeConfigSnapshotFile), map[string]any{
 		"oauthAccount": map[string]any{"emailAddress": label},
 	})
-}
-
-func claudeKeychainFingerprint(secret string) string {
-	sum := sha256.Sum256([]byte("claude:" + ClaudeKeychainService + ":" + secret))
-	return hex.EncodeToString(sum[:])
 }
 
 func (p *ClaudeProvider) ApplySnapshot(home string, profileDir string) error {
@@ -437,6 +432,9 @@ func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, d
 	rollbackConfig, configExisted, err := readOptionalFile(configPath)
 	if err != nil {
 		return err
+	}
+	if rollbackItem != nil {
+		secret = identity.WithClaudeMCPLogins(secret, rollbackItem.Secret)
 	}
 	if err := p.keychain.WriteItem(service, snapshot["account"], secret); err != nil {
 		return err

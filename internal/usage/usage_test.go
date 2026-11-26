@@ -599,3 +599,28 @@ func TestClaudeOAuthProviderRefreshesNothingItCannotTellApartFromTheActiveLogin(
 		t.Fatalf("refreshed = %#v", refreshed)
 	}
 }
+
+func TestClaudeOAuthProviderSavesRefreshedLoginWithoutMCPLogins(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/manifest.json", map[string]any{
+		"agent": "claude",
+		"label": "annapo.claude@example.com",
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": "Claude Code-credentials",
+		"account": "annapo",
+		"secret":  `{"claudeAiOauth":{"accessToken":"expired-token","refreshToken":"claude-refresh-token","expiresAt":1783480000000},"mcpOAuth":{"notion":{"refreshToken":"old"}}}`,
+	})
+	ClaudeOAuthProvider{
+		Fetcher: func(string) (map[string]any, error) { return usagePayload(12), nil },
+		TokenRefresher: func(string) (string, error) {
+			return `{"claudeAiOauth":{"accessToken":"fresh-token","refreshToken":"fresh-refresh-token","expiresAt":1783504032000},"mcpOAuth":{"notion":{"refreshToken":"old"}}}`, nil
+		},
+		NowEpoch: 1783486262,
+	}.Load(home)
+
+	secret := readJSON(filepath.Join(home, ".agent-switch/profiles/claude/1/keychain.json"))["secret"].(string)
+	if !strings.Contains(secret, "fresh-token") || strings.Contains(secret, "mcpOAuth") {
+		t.Fatalf("secret = %s", secret)
+	}
+}

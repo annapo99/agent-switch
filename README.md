@@ -121,8 +121,7 @@ security find-generic-password -s claude-token-bot -w | ags save --token --label
 Switching to it stores the token as the Claude Keychain login, so every
 `claude` command uses it without `CLAUDE_CODE_OAUTH_TOKEN`. Saving the same
 label again replaces the token. A token only has the inference scope: it
-cannot be refreshed and does not load claude.ai connectors, and MCP servers
-that use OAuth need to be connected again on this profile. The usage endpoint
+cannot be refreshed and does not load claude.ai connectors. The usage endpoint
 does not serve tokens, so `ags` reads a token profile's 5h and 7d usage from
 the rate limit headers of a one-token Haiku request, at most every five
 minutes; that request counts toward the account's usage.
@@ -151,6 +150,12 @@ such as `10m ago`.
 |---|---|---|
 | Claude Code | macOS Keychain service `Claude Code-credentials`, then `~/.claude/.credentials.json` fallback | `~/.agent-switch/profiles/claude/<number>/` |
 | Codex | `~/.codex/auth.json` | `~/.agent-switch/profiles/codex/<number>/` |
+
+Claude Code keeps the logins of MCP servers that use OAuth in the same
+Keychain item as the account login. Those logins belong to the machine, not
+to a Claude account: profiles do not save them, and switching keeps the ones
+Claude Code currently has, so an MCP server stays connected on every profile.
+On the `~/.claude/.credentials.json` fallback the file is switched as a whole.
 
 Claude usage metadata is enriched from saved Claude OAuth snapshots when a
 valid access or refresh token is available. Codex usage metadata is enriched

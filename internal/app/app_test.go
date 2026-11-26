@@ -757,7 +757,7 @@ func TestTokenProfileNeverOverwritesTheOrganizationProfile(t *testing.T) {
 	if code, out := runWith(service, []string{"list"}, ""); code != 0 || !strings.Contains(out, "2: bot (active)") {
 		t.Fatalf("list code=%d out=\n%s", code, out)
 	}
-	keychain.item.Secret = strings.TrimSuffix(keychain.item.Secret, "}") + `,"mcpOAuth":{"server":{"accessToken":"mcp"}}}`
+	keychain.item.Secret = strings.Replace(keychain.item.Secret, `"subscriptionType":null`, `"subscriptionType":"max"`, 1)
 	runWith(service, []string{"list"}, "")
 
 	annapoSnapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/keychain.json")
@@ -765,7 +765,7 @@ func TestTokenProfileNeverOverwritesTheOrganizationProfile(t *testing.T) {
 	if annapoSnapshot["secret"] != annapoSecret {
 		t.Fatalf("organization profile was overwritten: %#v", annapoSnapshot)
 	}
-	if !strings.Contains(tokenSnapshot["secret"].(string), "mcpOAuth") {
+	if !strings.Contains(tokenSnapshot["secret"].(string), `"max"`) {
 		t.Fatalf("token profile did not keep its latest credential: %#v", tokenSnapshot)
 	}
 
@@ -909,7 +909,7 @@ func TestBrowserLoginSurvivesWhenClaudeConfigLagsBehindTokenSwitch(t *testing.T)
 	if code, out := runWith(service, []string{"list"}, ""); code != 0 || !strings.Contains(out, "2: bot (active)") {
 		t.Fatalf("list code=%d out=\n%s", code, out)
 	}
-	keychain.item.Secret = strings.TrimSuffix(keychain.item.Secret, "}") + `,"mcpOAuth":{"server":{"accessToken":"mcp"}}}`
+	keychain.item.Secret = strings.Replace(keychain.item.Secret, `"subscriptionType":null`, `"subscriptionType":"max"`, 1)
 	runWith(service, []string{"list"}, "")
 	runWith(service, []string{"save", "--agent", "claude", "--yes"}, "")
 
@@ -920,7 +920,7 @@ func TestBrowserLoginSurvivesWhenClaudeConfigLagsBehindTokenSwitch(t *testing.T)
 	tokenManifest := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/manifest.json")
 	tokenSnapshot := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/keychain.json")
 	tokenConfig := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/config.json")
-	if tokenManifest["label"] != "bot" || !strings.Contains(tokenSnapshot["secret"].(string), "mcpOAuth") ||
+	if tokenManifest["label"] != "bot" || !strings.Contains(tokenSnapshot["secret"].(string), `"max"`) ||
 		len(tokenConfig["oauthAccount"].(map[string]any)) != 1 || tokenConfig["oauthAccount"].(map[string]any)["emailAddress"] != "bot" {
 		t.Fatalf("token profile took on the browser login: manifest=%#v config=%#v", tokenManifest, tokenConfig)
 	}
@@ -998,7 +998,7 @@ func TestTokenProfilesStayApartWhenClaudeConfigLagsBehind(t *testing.T) {
 		t.Fatalf("use second code=%d out=\n%s", code, out)
 	}
 	writeJSONFixture(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{"emailAddress": "first"}})
-	keychain.item.Secret = strings.TrimSuffix(keychain.item.Secret, "}") + `,"mcpOAuth":{"server":{"accessToken":"mcp"}}}`
+	keychain.item.Secret = strings.Replace(keychain.item.Secret, `"subscriptionType":null`, `"subscriptionType":"max"`, 1)
 
 	if code, out := runWith(service, []string{"use", numbers["first"]}, ""); code != 0 {
 		t.Fatalf("use first code=%d out=\n%s", code, out)
@@ -1007,10 +1007,10 @@ func TestTokenProfilesStayApartWhenClaudeConfigLagsBehind(t *testing.T) {
 	first := readJSONFixture(t, home, ".agent-switch/profiles/claude/"+numbers["first"]+"/keychain.json")["secret"].(string)
 	second := readJSONFixture(t, home, ".agent-switch/profiles/claude/"+numbers["second"]+"/keychain.json")["secret"].(string)
 	secondManifest := readJSONFixture(t, home, ".agent-switch/profiles/claude/"+numbers["second"]+"/manifest.json")
-	if !strings.Contains(first, "sk-ant-oat01-first") || strings.Contains(first, "mcpOAuth") {
+	if !strings.Contains(first, "sk-ant-oat01-first") || strings.Contains(first, `"max"`) {
 		t.Fatalf("first token was overwritten: %s", first)
 	}
-	if !strings.Contains(second, "sk-ant-oat01-second") || !strings.Contains(second, "mcpOAuth") || secondManifest["label"] != "second" {
+	if !strings.Contains(second, "sk-ant-oat01-second") || !strings.Contains(second, `"max"`) || secondManifest["label"] != "second" {
 		t.Fatalf("second token did not keep its own login: %s manifest=%#v", second, secondManifest)
 	}
 	if !strings.Contains(keychain.item.Secret, "sk-ant-oat01-first") {
@@ -1071,5 +1071,67 @@ func TestSaveTokenRejectsLabelThatNamesNothing(t *testing.T) {
 
 	if code, out := runWith(service, []string{"save", "--token", "--label", "Unknown"}, "sk-ant-oat01-bot\n"); code != 2 || !strings.Contains(out, "--label") {
 		t.Fatalf("code=%d out=\n%s", code, out)
+	}
+}
+
+func TestMCPLoginsStayWithTheMachineAcrossSwitches(t *testing.T) {
+	home := t.TempDir()
+	service, keychain, annapoSecret := saveBrowserLoginAndTokenProfile(t, home)
+	keychain.item.Secret = strings.TrimSuffix(annapoSecret, "}") + `,"mcpOAuth":{"notion":{"refreshToken":"mcp-1"}}}`
+	if code, out := runWith(service, []string{"list"}, ""); code != 0 || strings.Contains(out, "3:") {
+		t.Fatalf("an MCP login looked like a new account: code=%d out=\n%s", code, out)
+	}
+
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 {
+		t.Fatalf("use token code=%d out=\n%s", code, out)
+	}
+	if !strings.Contains(keychain.item.Secret, "sk-ant-oat01-bot") || !strings.Contains(keychain.item.Secret, "mcp-1") {
+		t.Fatalf("switching dropped the MCP login: %s", keychain.item.Secret)
+	}
+	keychain.item.Secret = strings.Replace(keychain.item.Secret, "mcp-1", "mcp-2", 1)
+	keychain.item.Secret = strings.Replace(keychain.item.Secret, `"subscriptionType":null`, `"subscriptionType":"max"`, 1)
+	if code, out := runWith(service, []string{"list"}, ""); code != 0 {
+		t.Fatalf("list code=%d out=\n%s", code, out)
+	}
+	if secret := readJSONFixture(t, home, ".agent-switch/profiles/claude/2/keychain.json")["secret"].(string); !strings.Contains(secret, `"max"`) {
+		t.Fatalf("token profile did not keep its latest login: %s", secret)
+	}
+	if code, out := runWith(service, []string{"use", "1"}, ""); code != 0 {
+		t.Fatalf("use browser code=%d out=\n%s", code, out)
+	}
+	if !strings.Contains(keychain.item.Secret, "annapo-refresh") || !strings.Contains(keychain.item.Secret, "mcp-2") || strings.Contains(keychain.item.Secret, "mcp-1") {
+		t.Fatalf("switching back restored an old MCP login: %s", keychain.item.Secret)
+	}
+	for _, number := range []string{"1", "2"} {
+		if secret := readJSONFixture(t, home, ".agent-switch/profiles/claude/"+number+"/keychain.json")["secret"].(string); strings.Contains(secret, "mcp") {
+			t.Fatalf("profile %s saved an MCP login: %s", number, secret)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude/3")); err == nil {
+		t.Fatal("an MCP login was saved as a third profile")
+	}
+}
+
+func TestOldProfileWithMCPLoginsTakesTheCurrentOnes(t *testing.T) {
+	home := t.TempDir()
+	service, keychain, _ := saveBrowserLoginAndTokenProfile(t, home)
+	snapshotPath := ".agent-switch/profiles/claude/2/keychain.json"
+	snapshot := readJSONFixture(t, home, snapshotPath)
+	snapshot["secret"] = strings.TrimSuffix(snapshot["secret"].(string), "}") + `,"mcpOAuth":{"notion":{"refreshToken":"stale"}}}`
+	writeJSONFixture(t, home, snapshotPath, snapshot)
+	manifestPath := ".agent-switch/profiles/claude/2/manifest.json"
+	manifest := readJSONFixture(t, home, manifestPath)
+	manifest["fingerprint"] = "fingerprint-of-the-whole-item"
+	writeJSONFixture(t, home, manifestPath, manifest)
+	keychain.item.Secret = strings.TrimSuffix(keychain.item.Secret, "}") + `,"mcpOAuth":{"notion":{"refreshToken":"fresh"}}}`
+
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 {
+		t.Fatalf("use token code=%d out=\n%s", code, out)
+	}
+	if !strings.Contains(keychain.item.Secret, "sk-ant-oat01-bot") || !strings.Contains(keychain.item.Secret, "fresh") || strings.Contains(keychain.item.Secret, "stale") {
+		t.Fatalf("keychain = %s", keychain.item.Secret)
+	}
+	if code, out := runWith(service, []string{"list"}, ""); code != 0 || !strings.Contains(out, "2: bot (active)") || strings.Contains(out, "3:") {
+		t.Fatalf("list code=%d out=\n%s", code, out)
 	}
 }

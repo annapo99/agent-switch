@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 )
 
@@ -411,5 +412,25 @@ func TestCreateProfileKeepsProfilesPrivate(t *testing.T) {
 		if err != nil || info.Mode().Perm() != 0o700 {
 			t.Fatalf("%s mode = %v err=%v", dir, info.Mode().Perm(), err)
 		}
+	}
+}
+
+func TestListProfilesFingerprintsTheSavedAccountLogin(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeStoreJSON(t, filepath.Join(profileDir, "manifest.json"), map[string]any{
+		"agent":       "claude",
+		"number":      1,
+		"label":       "bot",
+		"fingerprint": "fingerprint-of-the-whole-item",
+	})
+	writeStoreJSON(t, filepath.Join(profileDir, "keychain.json"), map[string]any{
+		"secret": `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","refreshToken":null,"scopes":["user:inference"]},"mcpOAuth":{"notion":{"refreshToken":"old"}}}`,
+	})
+	current := active("claude", "bot", identity.ClaudeKeychainFingerprint(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","refreshToken":null,"scopes":["user:inference"]},"mcpOAuth":{"notion":{"refreshToken":"new"}}}`), nil)
+
+	holder, ok := New(home).CredentialsHolder(current)
+	if !ok || holder.Number != 1 {
+		t.Fatalf("holder = %+v ok=%v", holder, ok)
 	}
 }
