@@ -436,9 +436,11 @@ func TestClaudeOAuthProviderUsesClaudeCodeUsageCacheForTheSameAccount(t *testing
 		},
 	})
 	limited := ClaudeOAuthProvider{
-		NowEpoch:          1783486262,
-		Fetcher:           func(string) (map[string]any, error) { return nil, errHTTPStatus(429) },
-		ActiveCredentials: func(string) (string, bool) { return `{"claudeAiOauth":{"accessToken":"active","refreshToken":"active-refresh"}}`, true },
+		NowEpoch: 1783486262,
+		Fetcher:  func(string) (map[string]any, error) { return nil, errHTTPStatus(429) },
+		ActiveCredentials: func(string) (string, bool) {
+			return `{"claudeAiOauth":{"accessToken":"active","refreshToken":"active-refresh"}}`, true
+		},
 	}
 
 	metadata := limited.Load(home)
