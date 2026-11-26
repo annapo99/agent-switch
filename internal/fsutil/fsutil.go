@@ -6,9 +6,7 @@ import (
 )
 
 func WriteFile(path string, data []byte) error {
-	if target, err := filepath.EvalSymlinks(path); err == nil {
-		path = target
-	}
+	path = resolveLinks(path)
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -31,4 +29,22 @@ func WriteFile(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func resolveLinks(path string) string {
+	for range 16 {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			return path
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return path
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = target
+	}
+	return path
 }

@@ -158,9 +158,11 @@ restarted last, a couple of seconds after `ags` exits. The daemon is
 restarted with the shell's environment minus the variables that pick
 another login, endpoint, or config: `CLAUDE_CODE_OAUTH_TOKEN`,
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
-`ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_UNIX_SOCKET`, `CLAUDE_CODE_USE_*`,
+`ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_UNIX_SOCKET`,
+`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`,
 and `CLAUDE_CONFIG_DIR`. Switching refuses to run while `CLAUDE_CONFIG_DIR`
-or `CODEX_HOME` is set, and says when the shell sets a login override.
+is set or `CODEX_HOME` points somewhere other than `~/.codex`, and says when
+the shell sets a login override.
 
 Usage metadata is best-effort; if a metadata source is unavailable, `ags` still
 lists and switches saved accounts. Claude's usage endpoint answers about once a

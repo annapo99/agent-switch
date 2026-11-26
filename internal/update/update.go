@@ -203,8 +203,10 @@ func download(ctx context.Context, cfg Config, url string) ([]byte, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("download %s: %s", url, resp.Status)
 	}
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, downloadLimit))
 }
+
+const downloadLimit = 100 << 20
 
 func verifyChecksum(asset string, data []byte, checksums string) error {
 	var expected string
@@ -241,7 +243,7 @@ func extractAGS(archive []byte) ([]byte, error) {
 			return nil, err
 		}
 		if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "ags" {
-			return io.ReadAll(tr)
+			return io.ReadAll(io.LimitReader(tr, downloadLimit))
 		}
 	}
 	return nil, fmt.Errorf("release archive does not contain ags")

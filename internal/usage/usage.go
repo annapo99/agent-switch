@@ -201,7 +201,7 @@ func (p ClaudeOAuthProvider) Load(home string) map[model.MetadataKey]model.Metad
 			}
 		}
 		if len(profileMetadata) > 0 {
-			key := identity.StrongestKey("claude", label, manifestMetadata(manifest))
+			key := identity.StrongestKey("claude", label, profileKeyMetadata(manifest, credentials))
 			metadata[key] = profileMetadata
 		}
 	}
@@ -284,7 +284,8 @@ func (p ClaudeOAuthProvider) usageRows(home, profileDir string, manifest map[str
 	if active && !inferenceOnly(oauth) {
 		accountUUID = manifestMetadata(manifest).String(model.MetadataAccountUUID)
 	}
-	payload, fetchedAt := lastClaudeUsage(home, profileDir, accountUUID)
+	since := lastSwitch(home)
+	payload, fetchedAt := lastClaudeUsage(home, profileDir, accountUUID, since)
 	if payload == nil {
 		return nil
 	}
@@ -310,7 +311,7 @@ func inferenceOnly(oauth map[string]any) bool {
 	return true
 }
 
-func lastClaudeUsage(home, profileDir, accountUUID string) (map[string]any, int64) {
+func lastClaudeUsage(home, profileDir, accountUUID string, since int64) (map[string]any, int64) {
 	own := readJSON(filepath.Join(profileDir, claudeUsageCacheFile))
 	payload, _ := own["usage"].(map[string]any)
 	fetchedAt, _ := numberValue(own["fetched_at"])
@@ -318,11 +319,21 @@ func lastClaudeUsage(home, profileDir, accountUUID string) (map[string]any, int6
 		cached, _ := readJSON(filepath.Join(home, ".claude.json"))["cachedUsageUtilization"].(map[string]any)
 		usage, ok := cached["utilization"].(map[string]any)
 		fetchedAtMs, hasTime := numberValue(cached["fetchedAtMs"])
-		if ok && hasTime && fetchedAtMs/1000 > fetchedAt && strings.EqualFold(stringValue(cached["accountUuid"]), accountUUID) {
+		if ok && hasTime && fetchedAtMs/1000 > fetchedAt && int64(fetchedAtMs/1000) >= since && strings.EqualFold(stringValue(cached["accountUuid"]), accountUUID) {
 			payload, fetchedAt = usage, fetchedAtMs/1000
 		}
 	}
 	return payload, int64(fetchedAt)
+}
+
+func profileKeyMetadata(manifest map[string]any, credentials string) model.Metadata {
+	metadata := manifestMetadata(manifest)
+	if inferenceOnly(claudeOAuthData(credentials)) {
+		delete(metadata, model.MetadataAccountUUID)
+		delete(metadata, model.MetadataOrganizationUUID)
+		delete(metadata, model.MetadataOrganizationName)
+	}
+	return metadata
 }
 
 func manifestMetadata(manifest map[string]any) model.Metadata {
@@ -689,6 +700,18 @@ func (p CodexProvider) Load(home string) map[model.MetadataKey]model.Metadata {
 			}
 		} else if fallbackEmail != "" {
 			metadata[model.MetadataKey{Agent: "codex", Label: strings.ToLower(fallbackEmail)}] = model.Metadata{"oauth_status": oauthStatus}
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json")); err == nil {
+		if id := identity.CodexAccountID(data); id != "" {
+			workspace := map[model.MetadataKey]model.Metadata{}
+			for key, profileMetadata := range metadata {
+				key.Organization = "codex:" + strings.ToLower(strings.TrimSpace(id))
+				workspace[key] = profileMetadata
+			}
+			for key, profileMetadata := range workspace {
+				metadata[key] = profileMetadata
+			}
 		}
 	}
 	return metadata

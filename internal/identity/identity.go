@@ -27,6 +27,11 @@ func OrganizationKeys(agent, label string, metadata model.Metadata) []model.Meta
 		key.Organization = "uuid:" + uuid
 		keys = append(keys, key)
 	}
+	if id := normalized(metadata.String(model.MetadataCodexAccountID)); id != "" {
+		key := base
+		key.Organization = "codex:" + id
+		keys = append(keys, key)
+	}
 	return keys
 }
 

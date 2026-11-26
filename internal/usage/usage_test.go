@@ -726,3 +726,66 @@ func TestRefuseRedirectKeepsCredentialsOnTheFirstHost(t *testing.T) {
 		t.Fatalf("followed=%v status=%d", followed, response.StatusCode)
 	}
 }
+
+func TestClaudeOAuthProviderShowsRecordedUsageOnAnOldTokenProfile(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".agent-switch/profiles/claude/2/manifest.json", map[string]any{
+		"agent": "claude", "number": 2, "label": "bot",
+		"metadata": map[string]any{model.MetadataAccountUUID: "work-account", model.MetadataOrganizationUUID: "work-org"},
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/2/keychain.json", map[string]any{
+		"secret": `{"claudeAiOauth":{"accessToken":"bot-token","refreshToken":null,"scopes":["user:inference"]}}`,
+	})
+	if err := SaveClaudeUsage(filepath.Join(home, ".agent-switch/profiles/claude/2"), usagePayload(30), 1783486262-60); err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := ClaudeOAuthProvider{NowEpoch: 1783486262}.Load(home)
+
+	if rows := tokenRows(metadata); len(rows) == 0 {
+		t.Fatalf("recorded usage is not shown under the token profile: %#v", metadata)
+	}
+}
+
+func TestClaudeCodeUsageCacheFromBeforeASwitchIsNotShown(t *testing.T) {
+	home := t.TempDir()
+	writeUsageProfile(t, home, "1", "annapo@example.com", "account-annapo")
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{"accountUuid": "account-annapo", "organizationUuid": "team-org"},
+		"cachedUsageUtilization": map[string]any{
+			"accountUuid": "account-annapo",
+			"fetchedAtMs": (1783486262 - 300) * 1000,
+			"utilization": usagePayload(77),
+		},
+	})
+	if err := MarkSwitch(home, 1783486262-60); err != nil {
+		t.Fatal(err)
+	}
+	limited := ClaudeOAuthProvider{
+		NowEpoch:          1783486262,
+		Fetcher:           func(string) (map[string]any, error) { return nil, errHTTPStatus(429) },
+		ActiveCredentials: func(string) (string, bool) { return `{"claudeAiOauth":{"accessToken":"active"}}`, true },
+	}
+
+	if rows := usageRows(t, limited.Load(home), "annapo@example.com"); len(rows) != 0 {
+		t.Fatalf("usage cached before the switch was shown: %#v", rows)
+	}
+}
+
+func TestCodexUsageGoesToTheActiveWorkspaceOfAnEmail(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".codex/auth.json", map[string]any{"tokens": map[string]any{"account_id": "business", "access_token": "codex-token"}})
+	provider := CodexProvider{Fetcher: func(string) (map[string]any, error) {
+		return map[string]any{"email": "same@example.com", "plan_type": "team"}, nil
+	}}
+	profiles := []model.Profile{
+		{Agent: "codex", Label: "same@example.com", Metadata: model.Metadata{model.MetadataCodexAccountID: "personal"}},
+		{Agent: "codex", Label: "same@example.com", Metadata: model.Metadata{model.MetadataCodexAccountID: "business"}},
+	}
+
+	merged := MergeProfilesWithUsageMetadata(profiles, provider.Load(home))
+
+	if merged[0].Metadata["status_lines"] != nil || merged[1].Metadata["status_lines"] == nil {
+		t.Fatalf("personal=%#v business=%#v", merged[0].Metadata, merged[1].Metadata)
+	}
+}

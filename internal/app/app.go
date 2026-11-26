@@ -731,10 +731,14 @@ func shownArg(arg string) string {
 
 func switchBlockedByEnvironment(agent string) string {
 	name := map[string]string{"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}[agent]
-	if name != "" && os.Getenv(name) != "" {
-		return name
+	value := os.Getenv(name)
+	if name == "" || value == "" {
+		return ""
 	}
-	return ""
+	if home, err := os.UserHomeDir(); err == nil && name == "CODEX_HOME" && filepath.Clean(value) == filepath.Join(home, ".codex") {
+		return ""
+	}
+	return name
 }
 
 func claudeLoginOverrides() []string {
@@ -914,6 +918,10 @@ func parseTokenOptions(args []string, stderr io.Writer) (string, bool) {
 			fmt.Fprintf(stderr, "unknown option: %s\n", shownArg(args[index]))
 			return "", false
 		}
+	}
+	if strings.HasPrefix(label, "sk-") || len(label) > 64 {
+		fmt.Fprintln(stderr, "--label looks like a token; pass the token on stdin and a short name as --label")
+		return "", false
 	}
 	if label == "" || strings.EqualFold(label, "unknown") {
 		fmt.Fprintln(stderr, "--token requires --label NAME")

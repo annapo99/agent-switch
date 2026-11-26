@@ -37,3 +37,25 @@ func TestWriteFileReplacesThroughSymlinksAndKeepsItPrivate(t *testing.T) {
 		t.Fatalf("temporary files were left behind: %v", entries)
 	}
 }
+
+func TestWriteFileCreatesTheTargetOfADanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dotfiles"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config.json")
+	if err := os.Symlink(filepath.Join("dotfiles", "config.json"), link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteFile(link, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced: %v %v", info, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "dotfiles", "config.json")); err != nil || string(data) != "new" {
+		t.Fatalf("target data=%q err=%v", data, err)
+	}
+}

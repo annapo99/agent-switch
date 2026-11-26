@@ -1489,3 +1489,32 @@ func TestUseOnTheActiveTokenRepairsALaggingClaudeConfig(t *testing.T) {
 		t.Fatalf("code=%d account=%#v out=\n%s", code, account, out)
 	}
 }
+
+func TestSaveTokenRefusesALabelThatLooksLikeAToken(t *testing.T) {
+	home := t.TempDir()
+	service := serviceWithKeychain(home, &memoryKeychain{})
+
+	code, out := runWith(service, []string{"save", "--token", "--label", "sk-ant-oat01-secret"}, "sk-ant-oat01-bot\n")
+
+	if code != 2 || strings.Contains(out, "sk-ant-oat01-secret") {
+		t.Fatalf("code=%d out=\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent-switch/profiles/claude")); err == nil {
+		t.Fatal("a profile was saved")
+	}
+}
+
+func TestCodexHomeAtTheDefaultPathIsAllowed(t *testing.T) {
+	real, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	t.Setenv("CODEX_HOME", filepath.Join(real, ".codex")+"/")
+	if got := switchBlockedByEnvironment("codex"); got != "" {
+		t.Fatalf("default CODEX_HOME blocked: %q", got)
+	}
+	t.Setenv("CODEX_HOME", filepath.Join(real, "other-codex"))
+	if got := switchBlockedByEnvironment("codex"); got != "CODEX_HOME" {
+		t.Fatalf("other CODEX_HOME = %q", got)
+	}
+}
