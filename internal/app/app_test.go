@@ -1426,3 +1426,66 @@ func TestErrorsNeverEchoATokenPassedAsAnArgument(t *testing.T) {
 		}
 	}
 }
+
+func TestUseKeepsAnUnconfirmedRotatedLogin(t *testing.T) {
+	home := t.TempDir()
+	service, keychain, _ := saveBrowserLoginAndTokenProfile(t, home)
+	online := false
+	service.claudeIdentity = func(string) (provider.ClaudeLoginIdentity, error) {
+		if !online {
+			return provider.ClaudeLoginIdentity{}, errors.New("offline")
+		}
+		return provider.ClaudeLoginIdentity{AccountUUID: "account-annapo", OrganizationUUID: "org-team"}, nil
+	}
+	rotated := `{"claudeAiOauth":{"accessToken":"annapo-access-2","refreshToken":"annapo-refresh-2"}}`
+	keychain.item.Secret = rotated
+
+	code, out := runWith(service, []string{"use", "2"}, "")
+	if code != 1 || !strings.Contains(out, "not saved in any profile") || keychain.item.Secret != rotated {
+		t.Fatalf("offline code=%d keychain=%s out=\n%s", code, keychain.item.Secret, out)
+	}
+
+	online = true
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 || !strings.Contains(keychain.item.Secret, "sk-ant-oat01-bot") {
+		t.Fatalf("online code=%d out=\n%s", code, out)
+	}
+	if secret := readJSONFixture(t, home, ".agent-switch/profiles/claude/1/keychain.json")["secret"]; secret != rotated {
+		t.Fatalf("the rotated login was not saved before switching: %v", secret)
+	}
+}
+
+func TestFileLoginsAreConfirmedToo(t *testing.T) {
+	home := t.TempDir()
+	writeJSONFixture(t, home, ".claude/.credentials.json", map[string]any{"claudeAiOauth": map[string]any{"accessToken": "file-access", "refreshToken": "file-refresh"}})
+	writeJSONFixture(t, home, ".claude.json", map[string]any{"oauthAccount": map[string]any{
+		"emailAddress": "file@example.com", "accountUuid": "account-file", "organizationUuid": "org-file",
+	}})
+	service := New(home)
+	service.claudeIdentity = func(token string) (provider.ClaudeLoginIdentity, error) {
+		if token != "file-access" {
+			t.Fatalf("token = %q", token)
+		}
+		return provider.ClaudeLoginIdentity{AccountUUID: "account-file", OrganizationUUID: "org-file"}, nil
+	}
+
+	if code, out := runWith(service, []string{"save", "--agent", "claude", "--yes"}, ""); code != 0 {
+		t.Fatalf("code=%d out=\n%s", code, out)
+	}
+}
+
+func TestUseOnTheActiveTokenRepairsALaggingClaudeConfig(t *testing.T) {
+	home := t.TempDir()
+	service, _, _ := saveBrowserLoginAndTokenProfile(t, home)
+	annapoConfig := readJSONFixture(t, home, ".claude.json")
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 {
+		t.Fatalf("use code=%d out=\n%s", code, out)
+	}
+	writeJSONFixture(t, home, ".claude.json", annapoConfig)
+
+	code, out := runWith(service, []string{"use", "2"}, "")
+
+	account, _ := readJSONFixture(t, home, ".claude.json")["oauthAccount"].(map[string]any)
+	if code != 0 || !strings.Contains(out, "Already using claude account #2.") || account["emailAddress"] != "bot" || account["organizationUuid"] != nil {
+		t.Fatalf("code=%d account=%#v out=\n%s", code, account, out)
+	}
+}

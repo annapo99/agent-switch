@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,8 +63,8 @@ func FetchClaudeLoginIdentity(accessToken string) (ClaudeLoginIdentity, error) {
 }
 
 func (p *ClaudeProvider) VerifyLogin(home string, account ActiveAccountIdentity, fetch func(accessToken string) (ClaudeLoginIdentity, error), nowMillis int64) error {
-	item := p.readKeychainItem(home)
-	if item == nil || identity.ClaudeKeychainFingerprint(item.Secret) != account.Fingerprint {
+	credentials, ok := p.loginWithFingerprint(home, account.Fingerprint)
+	if !ok {
 		return ErrClaudeLoginUnverified
 	}
 	var data struct {
@@ -71,7 +73,7 @@ func (p *ClaudeProvider) VerifyLogin(home string, account ActiveAccountIdentity,
 			ExpiresAt   *float64 `json:"expiresAt"`
 		} `json:"claudeAiOauth"`
 	}
-	if json.Unmarshal([]byte(item.Secret), &data) != nil || data.OAuth.AccessToken == "" {
+	if json.Unmarshal([]byte(credentials), &data) != nil || data.OAuth.AccessToken == "" {
 		return ErrClaudeLoginUnverified
 	}
 	if data.OAuth.ExpiresAt != nil && int64(*data.OAuth.ExpiresAt)-claudeExpiryMarginMillis < nowMillis {
@@ -85,6 +87,17 @@ func (p *ClaudeProvider) VerifyLogin(home string, account ActiveAccountIdentity,
 		return fmt.Errorf("%w: the Keychain login belongs to another account or organization than ~/.claude.json", ErrClaudeLoginUnverified)
 	}
 	return nil
+}
+
+func (p *ClaudeProvider) loginWithFingerprint(home, fingerprint string) (string, bool) {
+	if item := p.readKeychainItem(home); item != nil {
+		return item.Secret, identity.ClaudeKeychainFingerprint(item.Secret) == fingerprint
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
+	if err != nil {
+		return "", false
+	}
+	return string(data), p.file.fingerprintOf(map[string][]byte{".claude/.credentials.json": data}) == fingerprint
 }
 
 type ActiveAccountIdentity struct {

@@ -954,3 +954,25 @@ func TestFileApplyRestoresOnlyTheAgentsAuthFiles(t *testing.T) {
 		t.Fatal("a symlinked auth file was restored")
 	}
 }
+
+func TestKeychainApplyRestoresALargePreviousLoginWithoutItsMCPLogins(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": ClaudeKeychainService, "account": "annapo", "secret": `{"claudeAiOauth":{"accessToken":"target"}}`,
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/config.json", map[string]any{"oauthAccount": map[string]any{"emailAddress": "target@example.com"}})
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previous := `{"claudeAiOauth":{"accessToken":"previous"},"mcpOAuth":{"notion":{"serverName":"notion","refreshToken":"` + strings.Repeat("r", 200) + `"}}}`
+	keychain := &limitedKeychain{item: &KeychainItem{Account: "annapo", Secret: previous}, limit: 100}
+	p := NewClaudeProvider(keychain)
+
+	err := p.ApplySnapshot(home, profileDir)
+
+	notices := strings.Join(p.TakeNotices(), "\n")
+	if err == nil || !strings.Contains(keychain.item.Secret, `"accessToken":"previous"`) || !strings.Contains(notices, "previous login was restored without its MCP server logins") {
+		t.Fatalf("err=%v keychain=%s notices=%q", err, keychain.item.Secret, notices)
+	}
+}

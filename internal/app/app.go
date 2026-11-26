@@ -453,18 +453,26 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 		fmt.Fprintf(stdout, "No saved account matches #%d.\n", number)
 		return 1
 	}
-	if provider.MatchesProfile(s.home, current[0]) {
-		fmt.Fprintf(stdout, "Already using %s account #%d.\n", profile.Agent, profile.Number)
-		return 0
+	already := provider.MatchesProfile(s.home, current[0])
+	if !already {
+		if reason := s.unsavedClaudeLogin(profile.Agent); reason != "" {
+			fmt.Fprintln(stdout, reason)
+			return 1
+		}
 	}
-	if err := provider.ApplySnapshot(s.home, s.store.ProfileDir(profile.Agent, profile.Number)); err != nil {
-		fmt.Fprintln(stdout, err)
-		return 1
-	}
+	err := provider.ApplySnapshot(s.home, s.store.ProfileDir(profile.Agent, profile.Number))
 	if noticer, ok := provider.(interface{ TakeNotices() []string }); ok {
 		for _, notice := range noticer.TakeNotices() {
 			fmt.Fprintln(stdout, notice)
 		}
+	}
+	if err != nil {
+		fmt.Fprintln(stdout, err)
+		return 1
+	}
+	if already {
+		fmt.Fprintf(stdout, "Already using %s account #%d.\n", profile.Agent, profile.Number)
+		return 0
 	}
 	name := profile.DisplayName
 	if name == "" {
@@ -695,6 +703,23 @@ func (s *Service) syncActiveProfiles(agent string) {
 		}
 		_, _, _ = s.updateAccount(item.provider, item.account, duplicate)
 	}
+}
+
+func (s *Service) unsavedClaudeLogin(agent string) string {
+	if agent != "claude" {
+		return ""
+	}
+	for _, item := range s.detectedAccounts("claude") {
+		if _, saved := s.store.CredentialsHolder(item.account); saved {
+			continue
+		}
+		reason := "The current Claude login is not saved in any profile, so switching would lose it."
+		if err := s.verifyLogin(item); err != nil {
+			return reason + " " + err.Error() + ". Run claude once so it refreshes the login, check the network, and try again."
+		}
+		return reason + " Save it with `ags save --agent claude` first."
+	}
+	return ""
 }
 
 func shownArg(arg string) string {

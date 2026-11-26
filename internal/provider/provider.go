@@ -511,22 +511,33 @@ func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, d
 		}
 	}
 	if err != nil {
-		if rollbackItem != nil {
-			_ = p.keychain.WriteItem(ClaudeKeychainService, rollbackItem.Account, rollbackItem.Secret)
-		}
-		return err
+		return p.rollBack(rollbackItem, err)
 	}
 	if err := applyClaudeConfigSnapshotOrProfileFallback(home, profileDir); err != nil {
-		if rollbackItem != nil {
-			_ = p.keychain.WriteItem(ClaudeKeychainService, rollbackItem.Account, rollbackItem.Secret)
-		}
 		_ = restoreOptionalFile(configPath, rollbackConfig, configExisted)
-		return err
+		return p.rollBack(rollbackItem, err)
 	}
 	if len(mcpServers) > 0 {
 		p.notices = append(p.notices, "MCP server logins stay connected on this account: "+strings.Join(mcpServers, ", "))
 	}
 	return nil
+}
+
+func (p *ClaudeProvider) rollBack(previous *KeychainItem, cause error) error {
+	if previous == nil {
+		return cause
+	}
+	err := p.keychain.WriteItem(ClaudeKeychainService, previous.Account, previous.Secret)
+	if errors.Is(err, ErrSecretTooLarge) {
+		err = p.keychain.WriteItem(ClaudeKeychainService, previous.Account, identity.ClaudeLoginCredentials(previous.Secret))
+		if err == nil {
+			p.notices = append(p.notices, "The previous login was restored without its MCP server logins, which need to be connected again.")
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("%w; the previous Claude login could not be restored either: %v", cause, err)
+	}
+	return cause
 }
 
 func (p *ClaudeProvider) TakeNotices() []string {
