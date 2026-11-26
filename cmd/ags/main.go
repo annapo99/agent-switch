@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"runtime/debug"
 
@@ -11,8 +12,9 @@ var version = "dev"
 
 func main() {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
+	if err != nil || home == "" {
+		fmt.Fprintln(os.Stderr, "ags needs HOME to find agent logins")
+		os.Exit(1)
 	}
 	os.Exit(cli.MainWithVersion(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, home, resolvedVersion()))
 }

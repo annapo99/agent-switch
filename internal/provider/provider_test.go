@@ -924,3 +924,33 @@ func TestFileSnapshotRefusesCredentialsThatChangedSinceDetection(t *testing.T) {
 		t.Fatal("a snapshot was written")
 	}
 }
+
+func TestFileApplyRestoresOnlyTheAgentsAuthFiles(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/codex/1")
+	writeJSON(t, home, ".agent-switch/profiles/codex/1/files/.codex/auth.json", map[string]any{"tokens": map[string]any{"account_id": "one"}})
+	writeJSON(t, home, ".agent-switch/profiles/codex/1/files/Library/LaunchAgents/x.json", map[string]any{"run": "evil"})
+	p := NewCodexProvider()
+
+	if err := p.ApplySnapshot(home, profileDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "Library/LaunchAgents/x.json")); err == nil {
+		t.Fatal("a file outside the agent's auth files was restored")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex/auth.json")); err != nil {
+		t.Fatalf("auth.json was not restored: %v", err)
+	}
+
+	authPath := filepath.Join(profileDir, "files/.codex/auth.json")
+	if err := os.Remove(authPath); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, home, "elsewhere.json", map[string]any{"private": "key"})
+	if err := os.Symlink(filepath.Join(home, "elsewhere.json"), authPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ApplySnapshot(home, profileDir); err == nil {
+		t.Fatal("a symlinked auth file was restored")
+	}
+}

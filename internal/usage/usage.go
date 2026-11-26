@@ -31,6 +31,12 @@ const claudeUsageCacheFile = "usage.json"
 
 var errInvalidGrant = errors.New("invalid_grant")
 
+const responseLimit = 1 << 20
+
+func refuseRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 type Provider interface {
 	Load(home string) map[model.MetadataKey]model.Metadata
 }
@@ -340,7 +346,7 @@ func (p ClaudeOAuthProvider) fetch(accessToken string) (map[string]any, error) {
 	request.Header.Set("anthropic-beta", ClaudeOAuthBetaHeader)
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "agent-switch")
-	client := http.Client{Timeout: 8 * time.Second}
+	client := http.Client{Timeout: 8 * time.Second, CheckRedirect: refuseRedirect}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
@@ -349,7 +355,7 @@ func (p ClaudeOAuthProvider) fetch(accessToken string) (map[string]any, error) {
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, errHTTPStatus(response.StatusCode)
 	}
-	data, err := io.ReadAll(response.Body)
+	data, err := io.ReadAll(io.LimitReader(response.Body, responseLimit))
 	if err != nil {
 		return nil, err
 	}
@@ -440,20 +446,20 @@ func refreshClaudeOAuthCredentials(credentials string) (string, error) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "agent-switch")
-	client := http.Client{Timeout: 10 * time.Second}
+	client := http.Client{Timeout: 10 * time.Second, CheckRedirect: refuseRedirect}
 	response, err := client.Do(request)
 	if err != nil {
 		return "", err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		responseData, _ := io.ReadAll(response.Body)
+		responseData, _ := io.ReadAll(io.LimitReader(response.Body, responseLimit))
 		if response.StatusCode >= 400 && response.StatusCode < 500 && strings.Contains(string(responseData), "invalid_grant") {
 			return "", errInvalidGrant
 		}
 		return "", httpStatusError(response.StatusCode)
 	}
-	responseData, err := io.ReadAll(response.Body)
+	responseData, err := io.ReadAll(io.LimitReader(response.Body, responseLimit))
 	if err != nil {
 		return "", err
 	}
@@ -699,13 +705,13 @@ func (p CodexProvider) fetch(accessToken string) (map[string]any, error) {
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "agent-switch")
-	client := http.Client{Timeout: 8 * time.Second}
+	client := http.Client{Timeout: 8 * time.Second, CheckRedirect: refuseRedirect}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(response.Body)
+	data, err := io.ReadAll(io.LimitReader(response.Body, responseLimit))
 	if err != nil {
 		return nil, err
 	}

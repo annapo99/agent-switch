@@ -225,19 +225,28 @@ var ErrNoSavedCredentials = errors.New("this account has no saved credentials; s
 
 func (p *FileAuthProvider) ApplySnapshot(home string, profileDir string) error {
 	filesDir := filepath.Join(profileDir, "files")
-	if info, err := os.Stat(filesDir); err != nil || !info.IsDir() {
-		return ErrNoSavedCredentials
-	}
-	return filepath.WalkDir(filesDir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry == nil || entry.IsDir() {
-			return err
+	restored := 0
+	for _, rel := range p.authPaths {
+		src := filepath.Join(filesDir, filepath.FromSlash(rel))
+		info, err := os.Lstat(src)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-		rel, err := filepath.Rel(filesDir, path)
 		if err != nil {
 			return err
 		}
-		return copyFile(path, filepath.Join(home, rel))
-	})
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to restore %s: it is not a regular file", rel)
+		}
+		if err := copyFile(src, filepath.Join(home, filepath.FromSlash(rel))); err != nil {
+			return err
+		}
+		restored++
+	}
+	if restored == 0 {
+		return ErrNoSavedCredentials
+	}
+	return nil
 }
 
 func (p *FileAuthProvider) MatchesProfile(home string, profile model.Profile) bool {

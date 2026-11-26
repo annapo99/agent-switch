@@ -193,7 +193,7 @@ func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	case "record-usage":
 		return s.RecordUsage(stdin, stderr)
 	default:
-		fmt.Fprintf(stderr, "Unknown command: %s\n", command)
+		fmt.Fprintf(stderr, "Unknown command: %s\n", shownArg(command))
 		return 2
 	}
 }
@@ -697,6 +697,13 @@ func (s *Service) syncActiveProfiles(agent string) {
 	}
 }
 
+func shownArg(arg string) string {
+	if len(arg) > 32 || strings.HasPrefix(arg, "sk-") || strings.Contains(arg, "=") {
+		return "(hidden value)"
+	}
+	return arg
+}
+
 func switchBlockedByEnvironment(agent string) string {
 	name := map[string]string{"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}[agent]
 	if name != "" && os.Getenv(name) != "" {
@@ -845,7 +852,7 @@ func parseNumber(args []string, stderr io.Writer) (int, []string, bool) {
 	}
 	number, err := strconv.Atoi(args[0])
 	if err != nil {
-		fmt.Fprintf(stderr, "invalid account number: %s\n", args[0])
+		fmt.Fprintf(stderr, "invalid account number: %s\n", shownArg(args[0]))
 		return 0, nil, false
 	}
 	return number, args[1:], true
@@ -879,7 +886,7 @@ func parseTokenOptions(args []string, stderr io.Writer) (string, bool) {
 			}
 			index++
 		default:
-			fmt.Fprintf(stderr, "unknown option: %s\n", args[index])
+			fmt.Fprintf(stderr, "unknown option: %s\n", shownArg(args[index]))
 			return "", false
 		}
 	}
@@ -905,7 +912,7 @@ func parseOptions(args []string, allowJSON bool, stdout, stderr io.Writer) (opti
 			}
 			index++
 			if args[index] != "claude" && args[index] != "codex" {
-				fmt.Fprintf(stderr, "unsupported agent: %s\n", args[index])
+				fmt.Fprintf(stderr, "unsupported agent: %s\n", shownArg(args[index]))
 				return opts, false
 			}
 			opts.agent = args[index]
@@ -918,7 +925,7 @@ func parseOptions(args []string, allowJSON bool, stdout, stderr io.Writer) (opti
 			}
 			opts.json = true
 		default:
-			fmt.Fprintf(stderr, "unknown option: %s\n", arg)
+			fmt.Fprintf(stderr, "unknown option: %s\n", shownArg(arg))
 			return opts, false
 		}
 	}

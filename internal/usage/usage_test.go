@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -701,5 +702,27 @@ func TestClaudeOAuthProviderNeverShowsClaudeCodeUsageOnATokenProfile(t *testing.
 		if rows, _ := metadata["usage_limits"].([]any); len(rows) != 0 {
 			t.Fatalf("%v shows the work account's usage: %#v", key, rows)
 		}
+	}
+}
+
+func TestRefuseRedirectKeepsCredentialsOnTheFirstHost(t *testing.T) {
+	followed := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			http.Redirect(w, r, "/elsewhere", http.StatusPermanentRedirect)
+			return
+		}
+		followed = true
+	}))
+	defer server.Close()
+	client := http.Client{CheckRedirect: refuseRedirect}
+
+	response, err := client.Post(server.URL+"/token", "application/json", strings.NewReader(`{"refresh_token":"secret"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if followed || response.StatusCode != http.StatusPermanentRedirect {
+		t.Fatalf("followed=%v status=%d", followed, response.StatusCode)
 	}
 }

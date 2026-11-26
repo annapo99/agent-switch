@@ -1411,3 +1411,18 @@ func TestCodexWorkspacesOfOneEmailStayApart(t *testing.T) {
 		t.Fatalf("the personal profile was removed: %v", err)
 	}
 }
+
+func TestErrorsNeverEchoATokenPassedAsAnArgument(t *testing.T) {
+	home := t.TempDir()
+	for _, args := range [][]string{
+		{"save", "--token", "--label", "bot", "sk-ant-oat01-secret"},
+		{"use", "sk-ant-oat01-secret"},
+		{"sk-ant-oat01-secret"},
+		{"list", "--agent", "sk-ant-oat01-secret"},
+	} {
+		_, out, errOut := runService(t, home, args, "")
+		if strings.Contains(out+errOut, "sk-ant-oat01-secret") {
+			t.Fatalf("%v printed the token:\n%s%s", args, out, errOut)
+		}
+	}
+}
