@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/annapo99/agent-switch/internal/fsutil"
 	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 )
@@ -211,12 +212,14 @@ func (p *FileAuthProvider) SaveSnapshot(home string, account model.ActiveAccount
 	return nil
 }
 
+var ErrNoSavedCredentials = errors.New("this account has no saved credentials; save it again")
+
 func (p *FileAuthProvider) ApplySnapshot(home string, profileDir string) error {
 	filesDir := filepath.Join(profileDir, "files")
+	if info, err := os.Stat(filesDir); err != nil || !info.IsDir() {
+		return ErrNoSavedCredentials
+	}
 	return filepath.WalkDir(filesDir, func(path string, entry os.DirEntry, err error) error {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
 		if err != nil || entry == nil || entry.IsDir() {
 			return err
 		}
@@ -272,9 +275,19 @@ func (p *FileAuthProvider) fingerprint(home string, rels []string) string {
 }
 
 type ClaudeProvider struct {
-	file     *FileAuthProvider
-	keychain KeychainBackend
-	notices  []string
+	file          *FileAuthProvider
+	keychain      KeychainBackend
+	notices       []string
+	expectedLogin string
+}
+
+var ErrLoginChangedDuringSwitch = errors.New("Claude Code changed the login during the switch; run the command again")
+
+func (p *ClaudeProvider) ExpectCurrentLogin(home string) {
+	p.expectedLogin = ""
+	if item := p.readKeychainItem(home); item != nil {
+		p.expectedLogin = identity.ClaudeKeychainFingerprint(item.Secret)
+	}
 }
 
 func NewClaudeProvider(keychain KeychainBackend) *ClaudeProvider {
@@ -332,7 +345,7 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 	if isKeychainAccount(account) {
 		item := p.readKeychainItem(home)
 		if item == nil {
-			return nil
+			return errors.New("could not read the Claude Keychain login")
 		}
 		if identity.ClaudeKeychainFingerprint(item.Secret) != account.Fingerprint {
 			return errors.New("credentials changed while saving the Claude account; run the command again")
@@ -348,7 +361,7 @@ func (p *ClaudeProvider) SaveSnapshot(home string, account model.ActiveAccount, 
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(profileDir, "keychain.json"), append(data, '\n'), 0o600); err != nil {
+		if err := fsutil.WriteFile(filepath.Join(profileDir, "keychain.json"), append(data, '\n')); err != nil {
 			return err
 		}
 		if identity.ClaudeCredentialKind(item.Secret) == identity.CredentialKindToken {
@@ -440,6 +453,11 @@ func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, d
 	}
 	account := snapshot["account"]
 	rollbackItem := p.readKeychainItem(home)
+	expected := p.expectedLogin
+	p.expectedLogin = ""
+	if expected != "" && (rollbackItem == nil || identity.ClaudeKeychainFingerprint(rollbackItem.Secret) != expected) {
+		return ErrLoginChangedDuringSwitch
+	}
 	if rollbackItem != nil && rollbackItem.Account != "" {
 		account = rollbackItem.Account
 	}
@@ -718,10 +736,7 @@ func restoreOptionalFile(path string, data []byte, existed bool) error {
 		}
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
+	return fsutil.WriteFile(path, data)
 }
 
 func writeJSONFile(path string, payload any) error {
@@ -729,11 +744,7 @@ func writeJSONFile(path string, payload any) error {
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
+	return fsutil.WriteFile(path, append(data, '\n'))
 }
 
 func claudeOAuthAccount(home string) map[string]any {
@@ -865,10 +876,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0o600)
+	return fsutil.WriteFile(dst, data)
 }
 
 func fileExists(path string) bool {

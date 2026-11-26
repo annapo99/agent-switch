@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/annapo99/agent-switch/internal/fsutil"
 	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 )
@@ -79,7 +80,7 @@ func (s *Store) RenameProfile(existing model.Profile, name string) (model.Profil
 	profile := existing
 	profile.Active = false
 	profile.Name = name
-	if err := writeProfileAtomic(filepath.Join(s.ProfileDir(existing.Agent, existing.Number), "manifest.json"), profile); err != nil {
+	if err := writeProfile(filepath.Join(s.ProfileDir(existing.Agent, existing.Number), "manifest.json"), profile); err != nil {
 		return model.Profile{}, err
 	}
 	return profile, nil
@@ -261,7 +262,7 @@ func writeProfile(path string, profile model.Profile) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	return fsutil.WriteFile(path, data)
 }
 
 func profileMatchesAccount(profile model.Profile, account model.ActiveAccount) bool {

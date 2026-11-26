@@ -99,12 +99,29 @@ func isCurrentUserHome(home string) bool {
 	return err == nil && filepath.Clean(home) == filepath.Clean(current)
 }
 
+var commandLockWait = time.Minute
+
 func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		printHelp(stdout)
 		return 0
 	}
 	command := args[0]
+	if command != "update" {
+		wait := commandLockWait
+		if command == "record-usage" {
+			wait = 0
+		}
+		unlock, err := s.store.Lock(wait)
+		if err != nil {
+			if command == "record-usage" {
+				return 0
+			}
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		defer unlock()
+	}
 	switch command {
 	case "save":
 		if hasArg(args[1:], "--token") {
@@ -332,12 +349,14 @@ func (s *Service) SaveToken(stdout, stderr io.Writer, stdin io.Reader, label str
 	var err error
 	if existing, found := s.tokenProfile(account); found {
 		verb = "Updated"
-		profile, err = s.store.UpdateProfile(existing, account)
-	} else {
-		profile, err = s.store.CreateProfile(account)
-	}
-	if err == nil {
-		err = claude.SaveTokenSnapshot(s.home, label, secret, s.store.ProfileDir(profile.Agent, profile.Number))
+		err = claude.SaveTokenSnapshot(s.home, label, secret, s.store.ProfileDir(existing.Agent, existing.Number))
+		if err == nil {
+			profile, err = s.store.UpdateProfile(existing, account)
+		}
+	} else if profile, err = s.store.CreateProfile(account); err == nil {
+		if err = claude.SaveTokenSnapshot(s.home, label, secret, s.store.ProfileDir(profile.Agent, profile.Number)); err != nil {
+			s.store.RemoveProfile(profile.Agent, profile.Number)
+		}
 	}
 	if err != nil {
 		fmt.Fprintln(stdout, err)
@@ -408,6 +427,9 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 	if provider == nil {
 		fmt.Fprintf(stdout, "Unsupported agent: %s\n", profile.Agent)
 		return 1
+	}
+	if expecter, ok := provider.(interface{ ExpectCurrentLogin(home string) }); ok {
+		expecter.ExpectCurrentLogin(s.home)
 	}
 	s.syncActiveProfiles(profile.Agent)
 	if len(s.store.ProfilesByNumber(profile.Number, profile.Agent)) == 0 {
@@ -664,6 +686,7 @@ func (s *Service) saveAccount(provider provider.Provider, account model.ActiveAc
 		return model.Profile{}, err
 	}
 	if err := provider.SaveSnapshot(s.home, account, s.store.ProfileDir(profile.Agent, profile.Number)); err != nil {
+		s.store.RemoveProfile(profile.Agent, profile.Number)
 		return model.Profile{}, err
 	}
 	return profile, nil

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/annapo99/agent-switch/internal/claudebg"
 	"github.com/annapo99/agent-switch/internal/model"
@@ -1207,5 +1208,67 @@ func TestOldProfileMCPLoginsAreNeverRestored(t *testing.T) {
 	}
 	if !strings.Contains(keychain.item.Secret, "sk-ant-oat01-bot") || strings.Contains(keychain.item.Secret, "mcpOAuth") {
 		t.Fatalf("keychain = %s", keychain.item.Secret)
+	}
+}
+
+func TestCommandsWaitForAnotherAgsCommand(t *testing.T) {
+	home := t.TempDir()
+	service, _, _ := saveBrowserLoginAndTokenProfile(t, home)
+	unlock, err := service.store.Lock(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	original := commandLockWait
+	commandLockWait = 50 * time.Millisecond
+	defer func() { commandLockWait = original }()
+
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 1 || !strings.Contains(out, "another ags command is running") {
+		t.Fatalf("use code=%d out=\n%s", code, out)
+	}
+	if code, out := runWith(service, []string{"record-usage"}, `{"session_id":"s"}`); code != 0 || out != "" {
+		t.Fatalf("record-usage code=%d out=\n%s", code, out)
+	}
+}
+
+type changingKeychain struct {
+	memoryKeychain
+	reads int
+}
+
+func (k *changingKeychain) ReadItem(service string) (*provider.KeychainItem, error) {
+	k.reads++
+	if k.reads > 1 {
+		return &provider.KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"changed","refreshToken":"changed"}}`}, nil
+	}
+	return k.memoryKeychain.ReadItem(service)
+}
+
+func TestFailedSaveLeavesNoProfileBehind(t *testing.T) {
+	home := t.TempDir()
+	keychain := &changingKeychain{memoryKeychain: memoryKeychain{item: &provider.KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r"}}`}}}
+	service := serviceWithKeychain(home, keychain)
+
+	if code, out := runWith(service, []string{"save", "--agent", "claude", "--yes"}, ""); code == 0 || !strings.Contains(out, "credentials changed") {
+		t.Fatalf("save code=%d out=\n%s", code, out)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(home, ".agent-switch/profiles/claude")); len(entries) != 0 {
+		t.Fatalf("a half-saved profile was left: %v", entries)
+	}
+}
+
+func TestUseRefusesAProfileWithoutSavedCredentials(t *testing.T) {
+	home := t.TempDir()
+	saveTwoClaudeFileAccounts(t, home)
+	if err := os.RemoveAll(filepath.Join(home, ".agent-switch/profiles/claude/1/files")); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(home, ".claude/.credentials.json"))
+
+	code, out, _ := runService(t, home, []string{"use", "1"}, "")
+
+	after, _ := os.ReadFile(filepath.Join(home, ".claude/.credentials.json"))
+	if code != 1 || strings.Contains(out, "Switched") || string(before) != string(after) {
+		t.Fatalf("code=%d out=\n%s", code, out)
 	}
 }

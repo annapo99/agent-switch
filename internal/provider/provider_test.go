@@ -866,3 +866,42 @@ func TestKeychainApplyRestoresTheCurrentLoginWhenWritingFails(t *testing.T) {
 		t.Fatalf("keychain = %s", keychain.item.Secret)
 	}
 }
+
+func TestKeychainApplyStopsWhenTheLoginChangedSinceTheSwitchStarted(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": ClaudeKeychainService, "account": "annapo", "secret": `{"claudeAiOauth":{"accessToken":"target"}}`,
+	})
+	keychain := &fakeKeychain{item: &KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"current"}}`}}
+	p := NewClaudeProvider(keychain)
+
+	p.ExpectCurrentLogin(home)
+	keychain.item = &KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"rotated"}}`}
+	if err := p.ApplySnapshot(home, profileDir); !errors.Is(err, ErrLoginChangedDuringSwitch) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(keychain.writes) != 0 {
+		t.Fatalf("writes = %+v", keychain.writes)
+	}
+
+	p.ExpectCurrentLogin(home)
+	if err := p.ApplySnapshot(home, profileDir); err != nil || !strings.Contains(keychain.item.Secret, "target") {
+		t.Fatalf("err=%v keychain=%+v", err, keychain.item)
+	}
+}
+
+func TestKeychainSaveFailsWhenTheLoginCannotBeRead(t *testing.T) {
+	home := t.TempDir()
+	keychain := &fakeKeychain{item: &KeychainItem{Account: "annapo", Secret: `{"claudeAiOauth":{"accessToken":"a"}}`}}
+	p := NewClaudeProvider(keychain)
+	account, ok := p.Detect(home)
+	if !ok {
+		t.Fatal("expected account")
+	}
+	keychain.item = nil
+
+	if err := p.SaveSnapshot(home, account, filepath.Join(home, ".agent-switch/profiles/claude/1")); err == nil {
+		t.Fatal("a login that could not be read was saved as nothing")
+	}
+}

@@ -3,10 +3,12 @@ package store
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
@@ -463,4 +465,21 @@ func TestListProfilesRemovesMCPLoginsFromOldSnapshots(t *testing.T) {
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("snapshot info=%v err=%v", info, err)
 	}
+}
+
+func TestLockKeepsOneAgsCommandAtATime(t *testing.T) {
+	s := New(t.TempDir())
+	unlock, err := s.Lock(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Lock(50 * time.Millisecond); !errors.Is(err, ErrBusy) {
+		t.Fatalf("second lock err = %v", err)
+	}
+	unlock()
+	again, err := s.Lock(0)
+	if err != nil {
+		t.Fatalf("lock after unlock: %v", err)
+	}
+	again()
 }

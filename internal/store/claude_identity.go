@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/annapo99/agent-switch/internal/fsutil"
 	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 )
@@ -57,7 +58,11 @@ func rewriteClaudeKeychainSecret(profileDir, secret string) error {
 		return err
 	}
 	snapshot["secret"] = secret
-	return writeJSONAtomic(path, snapshot)
+	data, err = json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteFile(path, append(data, '\n'))
 }
 
 func claudeCredentials(profileDir string) string {
@@ -93,7 +98,7 @@ func hydrateClaudeIdentity(profile model.Profile, profileDir string) (model.Prof
 	if !changed {
 		return profile, nil
 	}
-	if err := writeProfileAtomic(filepath.Join(profileDir, "manifest.json"), next); err != nil {
+	if err := writeProfile(filepath.Join(profileDir, "manifest.json"), next); err != nil {
 		return profile, err
 	}
 	return next, nil
@@ -110,34 +115,4 @@ func copyStringMetadata(metadata model.Metadata, source map[string]any, sourceKe
 	}
 	metadata[targetKey] = value
 	return true
-}
-
-func writeProfileAtomic(path string, profile model.Profile) error {
-	return writeJSONAtomic(path, profile)
-}
-
-func writeJSONAtomic(path string, payload any) error {
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
 }

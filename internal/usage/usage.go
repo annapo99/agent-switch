@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/annapo99/agent-switch/internal/fsutil"
 	"github.com/annapo99/agent-switch/internal/identity"
 	"github.com/annapo99/agent-switch/internal/model"
 	"github.com/annapo99/agent-switch/internal/provider"
@@ -590,8 +591,7 @@ func writeJSONFile(path string, payload any) error {
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	return fsutil.WriteFile(path, append(data, '\n'))
 }
 
 func claudeOAuthData(credentials string) map[string]any {

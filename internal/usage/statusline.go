@@ -71,7 +71,7 @@ func ObserveStatusLine(home string, line StatusLine, activeTokenID func() string
 			delete(sessions, id)
 		}
 	}
-	if err := writeJSONFileAtomic(path, sessions); err != nil {
+	if err := writeJSONFile(path, sessions); err != nil {
 		return "", err
 	}
 	if seen && tokenID != "" && previous.TokenID == tokenID {
@@ -81,29 +81,5 @@ func ObserveStatusLine(home string, line StatusLine, activeTokenID func() string
 }
 
 func SaveClaudeUsage(profileDir string, payload map[string]any, now int64) error {
-	return writeJSONFileAtomic(filepath.Join(profileDir, claudeUsageCacheFile), map[string]any{"fetched_at": now, "usage": payload})
-}
-
-func writeJSONFileAtomic(path string, payload any) error {
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return writeJSONFile(filepath.Join(profileDir, claudeUsageCacheFile), map[string]any{"fetched_at": now, "usage": payload})
 }
