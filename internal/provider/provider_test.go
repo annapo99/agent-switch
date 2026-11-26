@@ -227,7 +227,7 @@ func TestKeychainSnapshotAndApplyRoundTripsSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if backend.item.Account != "annapo" || backend.item.Secret != original {
+	if backend.item.Account != "other" || backend.item.Secret != original {
 		t.Fatalf("restored item = %+v", backend.item)
 	}
 	if len(backend.writes) != 1 || backend.writes[0].Secret != original {
@@ -626,22 +626,22 @@ func TestKeychainSnapshotRefusesCredentialsThatChangedSinceDetection(t *testing.
 func TestSecurityAddCommandLineQuotesPrintableSecrets(t *testing.T) {
 	secret := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","note":"a \\ b"}}`
 
-	line, ok := securityAddCommandLine("Claude Code-credentials", `an "odd" \name`, secret)
+	line, err := securityAddCommandLine("Claude Code-credentials", `an "odd" \name`, secret)
 
 	want := `add-generic-password -U -s "Claude Code-credentials" -a "an \"odd\" \\name" ` +
 		`-w "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-test\",\"note\":\"a \\\\ b\"}}"` + "\n"
-	if !ok || line != want {
-		t.Fatalf("ok=%v line=%q", ok, line)
+	if err != nil || line != want {
+		t.Fatalf("err=%v line=%q", err, line)
 	}
 }
 
 func TestSecurityAddCommandLineHexEncodesOtherSecrets(t *testing.T) {
 	secret := "{\"name\":\"tab\there, caf\u00e9\"}"
 
-	line, ok := securityAddCommandLine("service", "account", secret)
+	line, err := securityAddCommandLine("service", "account", secret)
 
-	if want := `add-generic-password -U -s "service" -a "account" -X ` + hex.EncodeToString([]byte(secret)) + "\n"; !ok || line != want {
-		t.Fatalf("ok=%v line=%q", ok, line)
+	if want := `add-generic-password -U -s "service" -a "account" -X ` + hex.EncodeToString([]byte(secret)) + "\n"; err != nil || line != want {
+		t.Fatalf("err=%v line=%q", err, line)
 	}
 }
 
@@ -657,7 +657,7 @@ func TestSecurityAddCommandLineRefusesWhatStdinCannotCarry(t *testing.T) {
 		"empty secret":          {"service", "account", ""},
 	}
 	for name, args := range tests {
-		if line, ok := securityAddCommandLine(args[0], args[1], args[2]); ok {
+		if line, err := securityAddCommandLine(args[0], args[1], args[2]); err == nil {
 			t.Fatalf("%s: line=%q", name, line)
 		}
 	}
@@ -665,8 +665,8 @@ func TestSecurityAddCommandLineRefusesWhatStdinCannotCarry(t *testing.T) {
 		"printable": strings.Repeat(`"`, 1800),
 		"binary":    strings.Repeat("\t", 1800),
 	} {
-		if line, ok := securityAddCommandLine("service", "account", secret); !ok || len(line) > securityStdinLineLimit {
-			t.Fatalf("%s: ok=%v len=%d", name, ok, len(line))
+		if line, err := securityAddCommandLine("service", "account", secret); err != nil || len(line) > securityStdinLineLimit {
+			t.Fatalf("%s: err=%v len=%d", name, err, len(line))
 		}
 	}
 }
@@ -708,45 +708,40 @@ func TestSecurityKeychainWritesOverStdinAndChecksTheResult(t *testing.T) {
 	}
 }
 
-func TestSecurityKeychainFallsBackToArgumentsWhenStdinDidNotStoreTheSecret(t *testing.T) {
+func TestSecurityKeychainNeverPassesTheSecretAsAnArgument(t *testing.T) {
 	secret := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test"}}`
-	tests := map[string]func(call securityCall) (string, error){
-		"stdin command fails": func(call securityCall) (string, error) {
+	tests := map[string]struct {
+		secret string
+		answer func(call securityCall) (string, error)
+		want   error
+	}{
+		"stdin command fails": {secret, func(call securityCall) (string, error) {
 			if call.args[0] == "-i" {
 				return "", errors.New("exit status 2")
 			}
-			return "", nil
-		},
-		"stored value differs": func(call securityCall) (string, error) {
+			return secret + "\n", nil
+		}, nil},
+		"stored value differs": {secret, func(call securityCall) (string, error) {
 			if call.args[0] == "find-generic-password" {
 				return "something else\n", nil
 			}
 			return "", nil
-		},
+		}, errSecretNotStored},
+		"secret too long for stdin": {`{"a":"` + strings.Repeat("sk-ant-oat01-test", 300) + `"}`, func(call securityCall) (string, error) {
+			return "", nil
+		}, ErrSecretTooLarge},
 	}
-	for name, answer := range tests {
+	for name, test := range tests {
 		var calls []securityCall
-		if err := recordingSecurity(&calls, answer).WriteItem("service", "account", secret); err != nil {
-			t.Fatalf("%s: %v", name, err)
+		err := recordingSecurity(&calls, test.answer).WriteItem("service", "account", test.secret)
+		if err == nil || (test.want != nil && !errors.Is(err, test.want)) {
+			t.Fatalf("%s: err = %v", name, err)
 		}
-		last := calls[len(calls)-1]
-		if last.args[0] != "add-generic-password" || last.args[len(last.args)-1] != secret {
-			t.Fatalf("%s: calls = %#v", name, calls)
+		for _, call := range calls {
+			if strings.Contains(strings.Join(call.args, " "), "sk-ant-oat01-test") || call.args[0] == "add-generic-password" {
+				t.Fatalf("%s: secret was passed as an argument: %#v", name, call.args)
+			}
 		}
-	}
-}
-
-func TestSecurityKeychainUsesArgumentsForSecretsTooLongForStdin(t *testing.T) {
-	secret := strings.Repeat("a", 5000)
-	var calls []securityCall
-	backend := recordingSecurity(&calls, func(call securityCall) (string, error) {
-		return "", errors.New("keychain is locked")
-	})
-
-	err := backend.WriteItem("service", "account", secret)
-
-	if err == nil || err.Error() != "keychain is locked" || len(calls) != 1 || calls[0].args[0] != "add-generic-password" {
-		t.Fatalf("err=%v calls=%d", err, len(calls))
 	}
 }
 
@@ -811,5 +806,63 @@ func TestKeychainApplyNeverRestoresSavedMCPLogins(t *testing.T) {
 		if !strings.Contains(secret, `"accessToken":"saved"`) || strings.Contains(secret, "stale") || strings.Contains(secret, "fresh") != wantFresh {
 			t.Fatalf("%s: keychain = %s", name, secret)
 		}
+	}
+}
+
+type limitedKeychain struct {
+	item  *KeychainItem
+	limit int
+}
+
+func (k *limitedKeychain) IsAvailable(home string) bool { return true }
+func (k *limitedKeychain) ReadItem(service string) (*KeychainItem, error) {
+	return k.item, nil
+}
+func (k *limitedKeychain) WriteItem(service, account, secret string) error {
+	if len(secret) > k.limit {
+		return ErrSecretTooLarge
+	}
+	k.item = &KeychainItem{Account: account, Secret: secret}
+	return nil
+}
+
+func TestKeychainApplyDropsMCPLoginsThatDoNotFitAndSaysSo(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": ClaudeKeychainService, "account": "annapo", "secret": `{"claudeAiOauth":{"accessToken":"saved"}}`,
+	})
+	current := `{"claudeAiOauth":{"accessToken":"current"},"mcpOAuth":{"notion|1":{"serverName":"notion","refreshToken":"` + strings.Repeat("r", 200) + `"}}}`
+
+	for limit, want := range map[int]string{1000: "stay connected on this account: notion", 100: "need to be connected again: notion"} {
+		keychain := &limitedKeychain{item: &KeychainItem{Account: "annapo", Secret: current}, limit: limit}
+		p := NewClaudeProvider(keychain)
+		if err := p.ApplySnapshot(home, profileDir); err != nil {
+			t.Fatalf("limit %d: %v", limit, err)
+		}
+		notices := p.TakeNotices()
+		if !strings.Contains(keychain.item.Secret, `"accessToken":"saved"`) || len(notices) != 1 || !strings.Contains(notices[0], want) {
+			t.Fatalf("limit %d: keychain=%s notices=%q", limit, keychain.item.Secret, notices)
+		}
+		if limit == 100 && strings.Contains(keychain.item.Secret, "mcpOAuth") {
+			t.Fatalf("an MCP login that does not fit was written: %s", keychain.item.Secret)
+		}
+	}
+}
+
+func TestKeychainApplyRestoresTheCurrentLoginWhenWritingFails(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".agent-switch/profiles/claude/1")
+	writeJSON(t, home, ".agent-switch/profiles/claude/1/keychain.json", map[string]any{
+		"service": ClaudeKeychainService, "account": "annapo", "secret": `{"claudeAiOauth":{"accessToken":"` + strings.Repeat("s", 200) + `"}}`,
+	})
+	current := `{"claudeAiOauth":{"accessToken":"current"}}`
+	keychain := &limitedKeychain{item: &KeychainItem{Account: "annapo", Secret: current}, limit: 100}
+
+	if err := NewClaudeProvider(keychain).ApplySnapshot(home, profileDir); !errors.Is(err, ErrSecretTooLarge) {
+		t.Fatalf("err = %v", err)
+	}
+	if keychain.item.Secret != current {
+		t.Fatalf("keychain = %s", keychain.item.Secret)
 	}
 }

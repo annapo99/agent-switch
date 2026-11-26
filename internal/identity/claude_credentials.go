@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
+	"sort"
 )
 
 const ClaudeKeychainService = "Claude Code-credentials"
@@ -38,6 +40,27 @@ func WithClaudeMCPLogins(credentials, current string) string {
 	}
 	fields[claudeMCPLoginsKey] = logins
 	return marshalJSON(fields, credentials)
+}
+
+func ClaudeMCPServerNames(credentials string) []string {
+	var data struct {
+		Logins map[string]struct {
+			ServerName string `json:"serverName"`
+		} `json:"mcpOAuth"`
+	}
+	if json.Unmarshal([]byte(credentials), &data) != nil {
+		return nil
+	}
+	var names []string
+	for key, login := range data.Logins {
+		name := login.ServerName
+		if name == "" {
+			name = key
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return slices.Compact(names)
 }
 
 func ClaudeKeychainFingerprint(credentials string) string {

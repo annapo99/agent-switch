@@ -73,14 +73,22 @@ func (b SecurityKeychainBackend) ReadItem(service string) (*KeychainItem, error)
 	return &KeychainItem{Account: account, Secret: securityPassword(secret)}, nil
 }
 
+var ErrSecretTooLarge = errors.New("the credentials are too large to hand to security over stdin")
+
+var errSecretNotStored = errors.New("security did not store the credentials")
+
 func (b SecurityKeychainBackend) WriteItem(service, account, secret string) error {
-	if line, ok := securityAddCommandLine(service, account, secret); ok {
-		if _, err := b.security(line, "-i"); err == nil && b.holds(service, secret) {
-			return nil
-		}
+	line, err := securityAddCommandLine(service, account, secret)
+	if err != nil {
+		return err
 	}
-	_, err := b.security("", "add-generic-password", "-U", "-s", service, "-a", account, "-w", secret)
-	return err
+	if _, err := b.security(line, "-i"); err != nil {
+		return err
+	}
+	if !b.holds(service, secret) {
+		return errSecretNotStored
+	}
+	return nil
 }
 
 func (b SecurityKeychainBackend) holds(service, secret string) bool {
@@ -92,7 +100,7 @@ func (b SecurityKeychainBackend) security(input string, args ...string) (string,
 	if b.run != nil {
 		return b.run(input, args...)
 	}
-	cmd := exec.Command("security", args...)
+	cmd := exec.Command(securityPath, args...)
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}
@@ -126,16 +134,21 @@ func securityPassword(output string) string {
 
 const securityStdinLineLimit = 3800
 
-func securityAddCommandLine(service, account, secret string) (string, bool) {
+const securityPath = "/usr/bin/security"
+
+func securityAddCommandLine(service, account, secret string) (string, error) {
 	if service == "" || account == "" || secret == "" || !isPrintableASCII(service+account) {
-		return "", false
+		return "", errors.New("the Keychain service and account must be printable ASCII")
 	}
 	password := "-X " + hex.EncodeToString([]byte(secret))
 	if isPrintableASCII(secret) {
 		password = "-w " + securityQuote(secret)
 	}
 	line := fmt.Sprintf("add-generic-password -U -s %s -a %s %s\n", securityQuote(service), securityQuote(account), password)
-	return line, len(line) <= securityStdinLineLimit
+	if len(line) > securityStdinLineLimit {
+		return "", ErrSecretTooLarge
+	}
+	return line, nil
 }
 
 func isPrintableASCII(value string) bool {
@@ -261,6 +274,7 @@ func (p *FileAuthProvider) fingerprint(home string, rels []string) string {
 type ClaudeProvider struct {
 	file     *FileAuthProvider
 	keychain KeychainBackend
+	notices  []string
 }
 
 func NewClaudeProvider(keychain KeychainBackend) *ClaudeProvider {
@@ -415,39 +429,62 @@ func (p *ClaudeProvider) ApplySnapshot(home string, profileDir string) error {
 }
 
 func (p *ClaudeProvider) applyKeychainSnapshot(home string, profileDir string, data []byte) error {
+	p.notices = nil
 	var snapshot map[string]string
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		return err
 	}
-	service := strings.TrimSpace(snapshot["service"])
-	if service == "" {
-		service = ClaudeKeychainService
-	}
-	secret := securityPassword(snapshot["secret"])
-	if secret == "" {
+	login := identity.ClaudeLoginCredentials(securityPassword(snapshot["secret"]))
+	if login == "" {
 		return errors.New("invalid Claude keychain backup")
 	}
+	account := snapshot["account"]
 	rollbackItem := p.readKeychainItem(home)
+	if rollbackItem != nil && rollbackItem.Account != "" {
+		account = rollbackItem.Account
+	}
 	configPath := filepath.Join(home, ".claude.json")
 	rollbackConfig, configExisted, err := readOptionalFile(configPath)
 	if err != nil {
 		return err
 	}
-	secret = identity.ClaudeLoginCredentials(secret)
+	secret := login
+	var mcpServers []string
 	if rollbackItem != nil {
-		secret = identity.WithClaudeMCPLogins(secret, rollbackItem.Secret)
+		secret = identity.WithClaudeMCPLogins(login, rollbackItem.Secret)
+		mcpServers = identity.ClaudeMCPServerNames(rollbackItem.Secret)
 	}
-	if err := p.keychain.WriteItem(service, snapshot["account"], secret); err != nil {
+	err = p.keychain.WriteItem(ClaudeKeychainService, account, secret)
+	if errors.Is(err, ErrSecretTooLarge) && secret != login {
+		err = p.keychain.WriteItem(ClaudeKeychainService, account, login)
+		if err == nil {
+			p.notices = append(p.notices, "MCP server logins were too large to keep and need to be connected again: "+strings.Join(mcpServers, ", "))
+			mcpServers = nil
+		}
+	}
+	if err != nil {
+		if rollbackItem != nil {
+			_ = p.keychain.WriteItem(ClaudeKeychainService, rollbackItem.Account, rollbackItem.Secret)
+		}
 		return err
 	}
 	if err := applyClaudeConfigSnapshotOrProfileFallback(home, profileDir); err != nil {
 		if rollbackItem != nil {
-			_ = p.keychain.WriteItem(service, rollbackItem.Account, rollbackItem.Secret)
+			_ = p.keychain.WriteItem(ClaudeKeychainService, rollbackItem.Account, rollbackItem.Secret)
 		}
 		_ = restoreOptionalFile(configPath, rollbackConfig, configExisted)
 		return err
 	}
+	if len(mcpServers) > 0 {
+		p.notices = append(p.notices, "MCP server logins stay connected on this account: "+strings.Join(mcpServers, ", "))
+	}
 	return nil
+}
+
+func (p *ClaudeProvider) TakeNotices() []string {
+	notices := p.notices
+	p.notices = nil
+	return notices
 }
 
 func (p *ClaudeProvider) MatchesProfile(home string, profile model.Profile) bool {

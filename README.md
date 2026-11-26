@@ -185,9 +185,11 @@ available.
 - It does not print token values.
 - It stores credential snapshots under `~/.agent-switch/profiles/` and keeps
   `~/.agent-switch` readable by your user only.
-- It hands Keychain credentials to `security` over stdin, so they stay out of
-  the process list. When that does not work, or the credentials are too large
-  for one input line (a few kilobytes), they are passed as an argument.
+- It hands Keychain credentials to `/usr/bin/security` over stdin and never
+  as an argument, so they stay out of the process list and exec logs. When
+  the credentials are too large for one input line (a few kilobytes), a
+  switch leaves out the MCP server logins and names them, and fails if the
+  account login alone does not fit.
 - It may store Claude Keychain snapshots in profile directories so they can be
   restored later.
 - Do not commit `~/.agent-switch`, `~/.claude`, `~/.codex`, `.claude.json`,

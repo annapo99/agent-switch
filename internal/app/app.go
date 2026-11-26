@@ -418,6 +418,11 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
+	if noticer, ok := provider.(interface{ TakeNotices() []string }); ok {
+		for _, notice := range noticer.TakeNotices() {
+			fmt.Fprintln(stdout, notice)
+		}
+	}
 	name := profile.DisplayName
 	if name == "" {
 		name = profile.Agent
