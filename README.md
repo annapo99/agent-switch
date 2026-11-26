@@ -134,9 +134,10 @@ printf '%s' "$input" | ags record-usage >/dev/null 2>&1 &
 
 It records a session's rate limits into the profile of the token in
 `CLAUDE_CODE_OAUTH_TOKEN`, or else of the token in the Keychain, and only
-after a new reply in that session under the same token. The first reply a
-session gets after it starts or after a switch is skipped, because the
-status line cannot tell which account it came from. Nothing is recorded
+after a new reply in that session under the same token. Replies in the first
+minute after a switch, and the first reply a session gets after it starts
+or after a switch, are skipped, because the status line cannot tell which
+account they came from. Nothing is recorded
 when `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CONFIG_DIR` is
 set.
 

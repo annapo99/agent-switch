@@ -190,7 +190,7 @@ func (p ClaudeOAuthProvider) Load(home string) map[model.MetadataKey]model.Metad
 			profileMetadata["oauth_status"] = status
 		}
 		if !invalidRefresh {
-			if rows := p.usageRows(home, profileDir, manifest, credentials); len(rows) > 0 {
+			if rows := p.usageRows(home, profileDir, manifest, credentials, active.known && active.owns(manifest, credentials)); len(rows) > 0 {
 				profileMetadata["usage_limits"] = rows
 			}
 		}
@@ -262,7 +262,7 @@ const securityItemNotFound = 44
 // a minute per account and Claude Code polls it too, so when a fetch fails the
 // last known usage is shown with its age: this profile's own copy, or the copy
 // Claude Code keeps for the same account if that one is newer.
-func (p ClaudeOAuthProvider) usageRows(home, profileDir string, manifest map[string]any, credentials string) []any {
+func (p ClaudeOAuthProvider) usageRows(home, profileDir string, manifest map[string]any, credentials string, active bool) []any {
 	now := p.NowEpoch
 	if now == 0 {
 		now = time.Now().Unix()
@@ -274,7 +274,11 @@ func (p ClaudeOAuthProvider) usageRows(home, profileDir string, manifest map[str
 			return UsageRowsFromClaudePayload(payload, p.NowEpoch)
 		}
 	}
-	payload, fetchedAt := lastClaudeUsage(home, profileDir, manifestMetadata(manifest).String(model.MetadataAccountUUID))
+	accountUUID := ""
+	if active && !inferenceOnly(oauth) {
+		accountUUID = manifestMetadata(manifest).String(model.MetadataAccountUUID)
+	}
+	payload, fetchedAt := lastClaudeUsage(home, profileDir, accountUUID)
 	if payload == nil {
 		return nil
 	}

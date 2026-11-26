@@ -8,6 +8,9 @@ import (
 )
 
 const statusLineSessionsFile = "statusline-sessions.json"
+const statusLineSwitchFile = "statusline-switch.json"
+
+const switchSettleSeconds = 60
 const statusLineSessionLifetime = 7 * 24 * 60 * 60
 
 type StatusLine struct {
@@ -74,10 +77,24 @@ func ObserveStatusLine(home string, line StatusLine, activeTokenID func() string
 	if err := writeJSONFile(path, sessions); err != nil {
 		return "", err
 	}
-	if seen && tokenID != "" && previous.TokenID == tokenID {
+	if seen && tokenID != "" && previous.TokenID == tokenID && previous.SeenAt >= lastSwitch(home)+switchSettleSeconds {
 		return tokenID, nil
 	}
 	return "", nil
+}
+
+func MarkSwitch(home string, now int64) error {
+	return writeJSONFile(filepath.Join(home, ".agent-switch", statusLineSwitchFile), map[string]int64{"switched_at": now})
+}
+
+func lastSwitch(home string) int64 {
+	var mark struct {
+		SwitchedAt int64 `json:"switched_at"`
+	}
+	if data, err := os.ReadFile(filepath.Join(home, ".agent-switch", statusLineSwitchFile)); err == nil {
+		_ = json.Unmarshal(data, &mark)
+	}
+	return mark.SwitchedAt
 }
 
 func SaveClaudeUsage(profileDir string, payload map[string]any, now int64) error {

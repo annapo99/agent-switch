@@ -1174,6 +1174,11 @@ func TestRecordUsageSavesStatusLineUsageForTheActiveToken(t *testing.T) {
 			t.Fatalf("a browser login or a session from before the switch was recorded into profile %s", number)
 		}
 	}
+	record(statusLine("browser", 350, 13))
+	if _, err := os.Stat(usagePath("2")); err == nil {
+		t.Fatal("a reply right after the switch was recorded before sessions could follow it")
+	}
+	writeJSONFixture(t, home, ".agent-switch/statusline-switch.json", map[string]any{"switched_at": time.Now().Unix() - 120})
 
 	record(statusLine("browser", 400, 23.5))
 	if fiveHour("2") != 23.5 {

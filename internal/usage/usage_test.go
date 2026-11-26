@@ -420,12 +420,26 @@ func TestClaudeOAuthProviderUsesClaudeCodeUsageCacheForTheSameAccount(t *testing
 	home := t.TempDir()
 	writeUsageProfile(t, home, "1", "annapo@example.com", "account-annapo")
 	writeUsageProfile(t, home, "2", "other@example.com", "account-other")
-	writeJSON(t, home, ".claude.json", map[string]any{"cachedUsageUtilization": map[string]any{
-		"accountUuid": "account-annapo",
-		"fetchedAtMs": (1783486262 - 300) * 1000,
-		"utilization": usagePayload(7),
-	}})
-	limited := ClaudeOAuthProvider{NowEpoch: 1783486262, Fetcher: func(string) (map[string]any, error) { return nil, errHTTPStatus(429) }}
+	writeJSON(t, home, ".agent-switch/profiles/claude/3/manifest.json", map[string]any{
+		"agent": "claude", "number": 3, "label": "annapo@example.com",
+		"metadata": map[string]any{model.MetadataAccountUUID: "account-annapo", model.MetadataOrganizationUUID: "personal-org"},
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/3/keychain.json", map[string]any{
+		"secret": `{"claudeAiOauth":{"accessToken":"access-3","refreshToken":"refresh-3","expiresAt":1783504032000}}`,
+	})
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{"accountUuid": "account-annapo", "organizationUuid": "team-org"},
+		"cachedUsageUtilization": map[string]any{
+			"accountUuid": "account-annapo",
+			"fetchedAtMs": (1783486262 - 300) * 1000,
+			"utilization": usagePayload(7),
+		},
+	})
+	limited := ClaudeOAuthProvider{
+		NowEpoch:          1783486262,
+		Fetcher:           func(string) (map[string]any, error) { return nil, errHTTPStatus(429) },
+		ActiveCredentials: func(string) (string, bool) { return `{"claudeAiOauth":{"accessToken":"active","refreshToken":"active-refresh"}}`, true },
+	}
 
 	metadata := limited.Load(home)
 
@@ -435,6 +449,10 @@ func TestClaudeOAuthProviderUsesClaudeCodeUsageCacheForTheSameAccount(t *testing
 	}
 	if other := usageRows(t, metadata, "other@example.com"); len(other) != 0 {
 		t.Fatalf("other account got annapo usage: %#v", other)
+	}
+	personal, _ := metadata[model.MetadataKey{Agent: "claude", Label: "annapo@example.com", Organization: "uuid:personal-org"}]["usage_limits"].([]any)
+	if len(personal) != 0 {
+		t.Fatalf("the same person's other organization got the active organization's usage: %#v", personal)
 	}
 }
 
@@ -652,5 +670,34 @@ func TestClaudeOAuthProviderSavesRefreshedLoginWithoutMCPLogins(t *testing.T) {
 	secret := readJSON(filepath.Join(home, ".agent-switch/profiles/claude/1/keychain.json"))["secret"].(string)
 	if !strings.Contains(secret, "fresh-token") || strings.Contains(secret, "mcpOAuth") {
 		t.Fatalf("secret = %s", secret)
+	}
+}
+
+func TestClaudeOAuthProviderNeverShowsClaudeCodeUsageOnATokenProfile(t *testing.T) {
+	home := t.TempDir()
+	writeJSON(t, home, ".agent-switch/profiles/claude/2/manifest.json", map[string]any{
+		"agent": "claude", "number": 2, "label": "bot",
+		"metadata": map[string]any{model.MetadataAccountUUID: "work-account", model.MetadataOrganizationUUID: "work-org"},
+	})
+	writeJSON(t, home, ".agent-switch/profiles/claude/2/keychain.json", map[string]any{
+		"secret": `{"claudeAiOauth":{"accessToken":"bot-token","refreshToken":null,"scopes":["user:inference"]}}`,
+	})
+	writeJSON(t, home, ".claude.json", map[string]any{
+		"oauthAccount": map[string]any{"accountUuid": "work-account", "organizationUuid": "work-org"},
+		"cachedUsageUtilization": map[string]any{
+			"accountUuid": "work-account",
+			"fetchedAtMs": (1783486262 - 60) * 1000,
+			"utilization": usagePayload(77),
+		},
+	})
+	provider := ClaudeOAuthProvider{
+		NowEpoch:          1783486262,
+		ActiveCredentials: func(string) (string, bool) { return `{"claudeAiOauth":{"accessToken":"other"}}`, true },
+	}
+
+	for key, metadata := range provider.Load(home) {
+		if rows, _ := metadata["usage_limits"].([]any); len(rows) != 0 {
+			t.Fatalf("%v shows the work account's usage: %#v", key, rows)
+		}
 	}
 }

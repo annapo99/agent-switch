@@ -471,6 +471,7 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 		name = profile.Agent
 	}
 	if profile.Agent == "claude" {
+		_ = usage.MarkSwitch(s.home, time.Now().Unix())
 		fmt.Fprintf(stdout, "Switched %s to account #%d. Running sessions may take up to ~30s to pick it up.\n", name, profile.Number)
 		for _, override := range claudeLoginOverrides() {
 			fmt.Fprintf(stdout, "%s is set in this shell, so claude started from it keeps using that instead of account #%d.\n", override, profile.Number)
