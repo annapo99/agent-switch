@@ -600,26 +600,39 @@ func (s *Service) RecordUsage(stdin io.Reader, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	payload := usage.ClaudeUsageFromStatusLine(input)
-	if payload == nil {
+	line, ok := usage.ParseStatusLine(input)
+	if !ok || os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("ANTHROPIC_AUTH_TOKEN") != "" || os.Getenv("CLAUDE_CONFIG_DIR") != "" {
 		return 0
 	}
-	for _, item := range s.detectedAccounts("claude") {
-		tokenID := item.account.Metadata.String(model.MetadataTokenID)
-		if tokenID == "" {
+	now := time.Now().Unix()
+	tokenID, err := usage.ObserveStatusLine(s.home, line, s.activeClaudeTokenID, now)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if tokenID == "" {
+		return 0
+	}
+	for _, profile := range s.store.ListProfiles("claude") {
+		if profile.Metadata.String(model.MetadataTokenID) != tokenID {
 			continue
 		}
-		for _, profile := range s.store.ListProfiles("claude") {
-			if profile.Metadata.String(model.MetadataTokenID) != tokenID {
-				continue
-			}
-			if err := usage.SaveClaudeUsage(s.store.ProfileDir("claude", profile.Number), payload, time.Now().Unix()); err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
+		if err := usage.SaveClaudeUsage(s.store.ProfileDir("claude", profile.Number), line.Usage, now); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
 	}
 	return 0
+}
+
+func (s *Service) activeClaudeTokenID() string {
+	if token := strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")); token != "" {
+		return identity.ClaudeAccessTokenID(token)
+	}
+	for _, item := range s.detectedAccounts("claude") {
+		return item.account.Metadata.String(model.MetadataTokenID)
+	}
+	return ""
 }
 
 func (s *Service) syncActiveProfiles(agent string) {

@@ -125,16 +125,20 @@ cannot be refreshed and does not load claude.ai connectors. The usage endpoint
 does not serve tokens, and `ags` sends no request for a token profile. To
 show its 5h and 7d usage, pass Claude Code's
 [status line](https://code.claude.com/docs/en/statusline) input to
-`ags record-usage`, which records the rate limits into the profile of the
-token that is active at that moment:
+`ags record-usage`:
 
 ```bash
 input=$(cat)
 printf '%s' "$input" | ags record-usage >/dev/null 2>&1 &
 ```
 
-A session that has not sent a request since a switch still reports the
-previous account's numbers until its next reply.
+It records a session's rate limits into the profile of the token in
+`CLAUDE_CODE_OAUTH_TOKEN`, or else of the token in the Keychain, and only
+after a new reply in that session under the same token. The first reply a
+session gets after it starts or after a switch is skipped, because the
+status line cannot tell which account it came from. Nothing is recorded
+when `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CONFIG_DIR` is
+set.
 
 ### Claude background sessions
 

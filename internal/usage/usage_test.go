@@ -477,18 +477,68 @@ func TestClaudeOAuthProviderSendsNothingForATokenProfile(t *testing.T) {
 	}
 }
 
-func TestClaudeUsageFromStatusLine(t *testing.T) {
-	payload := ClaudeUsageFromStatusLine([]byte(`{"model":{"id":"x"},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1783490862},"seven_day":{"used_percentage":0},"spend_limit":{"used_percentage":9}}}`))
+func TestParseStatusLine(t *testing.T) {
+	line, ok := ParseStatusLine([]byte(`{"session_id":"s1","cost":{"total_api_duration_ms":2300},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1783490862},"seven_day":{"used_percentage":0},"spend_limit":"changed shape"}}`))
 
-	fiveHour, _ := payload["five_hour"].(map[string]any)
-	sevenDay, _ := payload["seven_day"].(map[string]any)
-	if len(payload) != 2 || fiveHour["utilization"] != 23.5 || fiveHour["resets_at"] != "2026-07-08T06:07:42Z" || sevenDay["utilization"] != float64(0) || sevenDay["resets_at"] != nil {
-		t.Fatalf("payload = %#v", payload)
+	fiveHour, _ := line.Usage["five_hour"].(map[string]any)
+	sevenDay, _ := line.Usage["seven_day"].(map[string]any)
+	if !ok || line.SessionID != "s1" || line.APIDurationMS != 2300 || len(line.Usage) != 2 ||
+		fiveHour["utilization"] != 23.5 || fiveHour["resets_at"] != "2026-07-08T06:07:42Z" || sevenDay["utilization"] != float64(0) || sevenDay["resets_at"] != nil {
+		t.Fatalf("line = %#v ok=%v", line, ok)
 	}
-	for _, input := range []string{`{"model":{"id":"x"}}`, `{"rate_limits":{"five_hour":{"resets_at":1}}}`, `not json`, ``} {
-		if payload := ClaudeUsageFromStatusLine([]byte(input)); payload != nil {
-			t.Fatalf("ClaudeUsageFromStatusLine(%q) = %#v", input, payload)
+	if line, ok := ParseStatusLine([]byte(`{"session_id":"s1","rate_limits":{"five_hour":{"used_percentage":5,"resets_at":1783490862.5},"seven_day":"x"}}`)); !ok || len(line.Usage) != 1 {
+		t.Fatalf("one readable window = %#v ok=%v", line, ok)
+	}
+	for _, input := range []string{
+		`{"session_id":"s1","model":{"id":"x"}}`,
+		`{"rate_limits":{"five_hour":{"used_percentage":5}}}`,
+		`{"session_id":"s1","rate_limits":{"five_hour":{"resets_at":1}}}`,
+		`not json`,
+		``,
+	} {
+		if line, ok := ParseStatusLine([]byte(input)); ok {
+			t.Fatalf("ParseStatusLine(%q) = %#v", input, line)
 		}
+	}
+}
+
+func TestObserveStatusLineRecordsOnlyNewResponsesOfTheSameLogin(t *testing.T) {
+	home := t.TempDir()
+	active := "token-a"
+	reads := 0
+	observe := func(session string, apiMS float64) string {
+		t.Helper()
+		tokenID, err := ObserveStatusLine(home, StatusLine{SessionID: session, APIDurationMS: apiMS}, func() string { reads++; return active }, 1783486262)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tokenID
+	}
+
+	if got := observe("s1", 100); got != "" {
+		t.Fatalf("first sight of a session recorded into %q", got)
+	}
+	if got := observe("s1", 250); got != "token-a" {
+		t.Fatalf("new response recorded into %q", got)
+	}
+	readsBefore := reads
+	if got := observe("s1", 250); got != "" || reads != readsBefore {
+		t.Fatalf("a repeated status line recorded into %q or read the login (%d reads)", got, reads-readsBefore)
+	}
+	active = "token-b"
+	if got := observe("s1", 400); got != "" {
+		t.Fatalf("the first response after a switch recorded into %q", got)
+	}
+	if got := observe("s1", 500); got != "token-b" {
+		t.Fatalf("next response after a switch recorded into %q", got)
+	}
+	active = ""
+	observe("s2", 1)
+	if got := observe("s2", 2); got != "" {
+		t.Fatalf("a login without a token recorded into %q", got)
+	}
+	if info, err := os.Stat(filepath.Join(home, ".agent-switch", statusLineSessionsFile)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("sessions file info=%v err=%v", info, err)
 	}
 }
 

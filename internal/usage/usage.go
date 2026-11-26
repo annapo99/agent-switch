@@ -299,38 +299,6 @@ func inferenceOnly(oauth map[string]any) bool {
 	return true
 }
 
-func SaveClaudeUsage(profileDir string, payload map[string]any, now int64) error {
-	return writeJSONFile(filepath.Join(profileDir, claudeUsageCacheFile), map[string]any{"fetched_at": now, "usage": payload})
-}
-
-func ClaudeUsageFromStatusLine(input []byte) map[string]any {
-	var status struct {
-		RateLimits map[string]struct {
-			UsedPercentage *float64 `json:"used_percentage"`
-			ResetsAt       *int64   `json:"resets_at"`
-		} `json:"rate_limits"`
-	}
-	if json.Unmarshal(input, &status) != nil {
-		return nil
-	}
-	payload := map[string]any{}
-	for _, key := range []string{"five_hour", "seven_day"} {
-		window, ok := status.RateLimits[key]
-		if !ok || window.UsedPercentage == nil {
-			continue
-		}
-		entry := map[string]any{"utilization": *window.UsedPercentage}
-		if window.ResetsAt != nil {
-			entry["resets_at"] = time.Unix(*window.ResetsAt, 0).UTC().Format(time.RFC3339)
-		}
-		payload[key] = entry
-	}
-	if len(payload) == 0 {
-		return nil
-	}
-	return payload
-}
-
 func lastClaudeUsage(home, profileDir, accountUUID string) (map[string]any, int64) {
 	own := readJSON(filepath.Join(profileDir, claudeUsageCacheFile))
 	payload, _ := own["usage"].(map[string]any)

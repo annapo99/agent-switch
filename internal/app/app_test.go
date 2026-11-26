@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1137,38 +1138,56 @@ func TestOldProfileWithMCPLoginsTakesTheCurrentOnes(t *testing.T) {
 }
 
 func TestRecordUsageSavesStatusLineUsageForTheActiveToken(t *testing.T) {
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CONFIG_DIR"} {
+		t.Setenv(name, "")
+	}
 	home := t.TempDir()
 	service, _, _ := saveBrowserLoginAndTokenProfile(t, home)
-	statusLine := `{"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1783490862},"seven_day":{"used_percentage":41}}}`
+	statusLine := func(session string, apiMS int, fiveHour float64) string {
+		return fmt.Sprintf(`{"session_id":%q,"cost":{"total_api_duration_ms":%d},"rate_limits":{"five_hour":{"used_percentage":%v,"resets_at":1783490862},"seven_day":{"used_percentage":41}}}`, session, apiMS, fiveHour)
+	}
+	record := func(input string) {
+		t.Helper()
+		if code, out := runWith(service, []string{"record-usage"}, input); code != 0 || out != "" {
+			t.Fatalf("record-usage code=%d out=\n%s", code, out)
+		}
+	}
 	usagePath := func(number string) string {
 		return filepath.Join(home, ".agent-switch/profiles/claude", number, "usage.json")
 	}
-
-	if code, out := runWith(service, []string{"record-usage"}, statusLine); code != 0 || out != "" {
-		t.Fatalf("record on browser login code=%d out=\n%s", code, out)
-	}
-	for _, number := range []string{"1", "2"} {
-		if _, err := os.Stat(usagePath(number)); err == nil {
-			t.Fatalf("browser login usage was recorded into profile %s", number)
-		}
+	fiveHour := func(number string) any {
+		recorded := readJSONFromPath(usagePath(number))
+		window, _ := recorded["usage"].(map[string]any)["five_hour"].(map[string]any)
+		return window["utilization"]
 	}
 
+	record(statusLine("browser", 100, 10))
+	record(statusLine("browser", 200, 11))
 	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 {
 		t.Fatalf("use token code=%d out=\n%s", code, out)
 	}
-	if code, out := runWith(service, []string{"record-usage"}, `{"model":{"id":"x"}}`); code != 0 || out != "" {
-		t.Fatalf("record without rate limits code=%d out=\n%s", code, out)
+	record(statusLine("browser", 200, 11))
+	record(statusLine("browser", 300, 12))
+	for _, number := range []string{"1", "2"} {
+		if _, err := os.Stat(usagePath(number)); err == nil {
+			t.Fatalf("a browser login or a session from before the switch was recorded into profile %s", number)
+		}
 	}
-	if _, err := os.Stat(usagePath("2")); err == nil {
-		t.Fatal("usage was recorded without rate limits")
+
+	record(statusLine("browser", 400, 23.5))
+	if fiveHour("2") != 23.5 {
+		t.Fatalf("token usage = %#v", readJSONFromPath(usagePath("2")))
 	}
-	if code, out := runWith(service, []string{"record-usage"}, statusLine); code != 0 || out != "" {
-		t.Fatalf("record on token code=%d out=\n%s", code, out)
+	record(`{"session_id":"browser","cost":{"total_api_duration_ms":500}}`)
+	if fiveHour("2") != 23.5 {
+		t.Fatal("a status line without rate limits changed the recorded usage")
 	}
-	recorded := readJSONFromPath(usagePath("2"))
-	fiveHour, _ := recorded["usage"].(map[string]any)["five_hour"].(map[string]any)
-	if fiveHour["utilization"] != 23.5 || recorded["fetched_at"] == nil {
-		t.Fatalf("recorded = %#v", recorded)
+
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-other")
+	record(statusLine("env", 100, 90))
+	record(statusLine("env", 200, 91))
+	if fiveHour("2") != 23.5 {
+		t.Fatal("a session on another token was recorded into the Keychain token's profile")
 	}
 	if _, err := os.Stat(usagePath("1")); err == nil {
 		t.Fatal("token usage was recorded into the browser profile")

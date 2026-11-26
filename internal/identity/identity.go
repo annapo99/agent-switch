@@ -66,7 +66,11 @@ func ClaudeTokenID(credentials string) string {
 	if ClaudeCredentialKind(credentials) != CredentialKindToken {
 		return ""
 	}
-	sum := sha256.Sum256([]byte("claude-token:" + claudeOAuth(credentials).AccessToken))
+	return ClaudeAccessTokenID(claudeOAuth(credentials).AccessToken)
+}
+
+func ClaudeAccessTokenID(accessToken string) string {
+	sum := sha256.Sum256([]byte("claude-token:" + accessToken))
 	return hex.EncodeToString(sum[:8])
 }
 
