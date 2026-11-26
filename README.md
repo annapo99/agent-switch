@@ -150,7 +150,13 @@ A session that is busy at that moment is restarted mid-task: its in-progress
 reply or tool call is cut off, and shell commands it left running in the
 background keep running without it. Send it a message to pick up where it
 stopped. When `ags` runs inside a background session, that session is
-restarted last, a couple of seconds after `ags` exits.
+restarted last, a couple of seconds after `ags` exits. The daemon is
+restarted with the shell's environment minus the variables that pick
+another login, endpoint, or config: `CLAUDE_CODE_OAUTH_TOKEN`,
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
+`ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_UNIX_SOCKET`, `CLAUDE_CODE_USE_*`,
+and `CLAUDE_CONFIG_DIR`. Switching refuses to run while `CLAUDE_CONFIG_DIR`
+or `CODEX_HOME` is set, and says when the shell sets a login override.
 
 Usage metadata is best-effort; if a metadata source is unavailable, `ags` still
 lists and switches saved accounts. Claude's usage endpoint answers about once a

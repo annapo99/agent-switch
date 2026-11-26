@@ -440,6 +440,10 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 		fmt.Fprintf(stdout, "Unsupported agent: %s\n", profile.Agent)
 		return 1
 	}
+	if blocked := switchBlockedByEnvironment(profile.Agent); blocked != "" {
+		fmt.Fprintf(stdout, "%s is set, so %s reads another config than the one ags switches. Unset it and run again.\n", blocked, profile.Agent)
+		return 1
+	}
 	if expecter, ok := provider.(interface{ ExpectCurrentLogin(home string) }); ok {
 		expecter.ExpectCurrentLogin(s.home)
 	}
@@ -468,6 +472,9 @@ func (s *Service) Use(number int, stdout io.Writer, stdin io.Reader, agent strin
 	}
 	if profile.Agent == "claude" {
 		fmt.Fprintf(stdout, "Switched %s to account #%d. Running sessions may take up to ~30s to pick it up.\n", name, profile.Number)
+		for _, override := range claudeLoginOverrides() {
+			fmt.Fprintf(stdout, "%s is set in this shell, so claude started from it keeps using that instead of account #%d.\n", override, profile.Number)
+		}
 		s.moveClaudeBackground(stdout)
 		return 0
 	}
@@ -687,6 +694,24 @@ func (s *Service) syncActiveProfiles(agent string) {
 		}
 		_, _, _ = s.updateAccount(item.provider, item.account, duplicate)
 	}
+}
+
+func switchBlockedByEnvironment(agent string) string {
+	name := map[string]string{"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}[agent]
+	if name != "" && os.Getenv(name) != "" {
+		return name
+	}
+	return ""
+}
+
+func claudeLoginOverrides() []string {
+	var set []string
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+		if os.Getenv(name) != "" {
+			set = append(set, name)
+		}
+	}
+	return set
 }
 
 func (s *Service) verifyLogin(item detectedAccount) error {

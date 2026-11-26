@@ -102,6 +102,10 @@ func TestAccountEnvDropsCredentialOverrides(t *testing.T) {
 		"HOME=/Users/me",
 		"ANTHROPIC_API_KEY=key",
 		"ANTHROPIC_AUTH_TOKEN=auth",
+		"ANTHROPIC_BASE_URL=https://gateway.example.com",
+		"ANTHROPIC_CUSTOM_HEADERS=X-Key: secret",
+		"CLAUDE_CODE_USE_BEDROCK=1",
+		"CLAUDE_CONFIG_DIR=/tmp/other",
 	}
 
 	got := accountEnv(env)

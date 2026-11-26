@@ -107,9 +107,16 @@ func CLI(args ...string) ([]byte, error) {
 }
 
 var credentialOverrides = map[string]bool{
-	"CLAUDE_CODE_OAUTH_TOKEN": true,
-	"ANTHROPIC_API_KEY":       true,
-	"ANTHROPIC_AUTH_TOKEN":    true,
+	"CLAUDE_CODE_OAUTH_TOKEN":  true,
+	"ANTHROPIC_API_KEY":        true,
+	"ANTHROPIC_AUTH_TOKEN":     true,
+	"ANTHROPIC_BASE_URL":       true,
+	"ANTHROPIC_CUSTOM_HEADERS": true,
+	"ANTHROPIC_UNIX_SOCKET":    true,
+	"CLAUDE_CODE_USE_BEDROCK":  true,
+	"CLAUDE_CODE_USE_VERTEX":   true,
+	"CLAUDE_CODE_USE_FOUNDRY":  true,
+	"CLAUDE_CONFIG_DIR":        true,
 }
 
 func accountEnv(env []string) []string {

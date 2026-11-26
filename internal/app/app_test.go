@@ -1359,3 +1359,26 @@ func TestSaveRefusesALoginThatBelongsToAnotherOrganization(t *testing.T) {
 		t.Fatal("the work login was saved under the personal organization")
 	}
 }
+
+func TestUseRespectsAccountOverridesInTheEnvironment(t *testing.T) {
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CONFIG_DIR"} {
+		t.Setenv(name, "")
+	}
+	home := t.TempDir()
+	saveTwoClaudeFileAccounts(t, home)
+	before, _ := os.ReadFile(filepath.Join(home, ".claude/.credentials.json"))
+
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "other"))
+	code, out, _ := runService(t, home, []string{"use", "1"}, "")
+	after, _ := os.ReadFile(filepath.Join(home, ".claude/.credentials.json"))
+	if code != 1 || !strings.Contains(out, "CLAUDE_CONFIG_DIR is set") || string(before) != string(after) {
+		t.Fatalf("CLAUDE_CONFIG_DIR code=%d out=\n%s", code, out)
+	}
+
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-env")
+	code, out, _ = runService(t, home, []string{"use", "1"}, "")
+	if code != 0 || !strings.Contains(out, "CLAUDE_CODE_OAUTH_TOKEN is set in this shell") || strings.Contains(out, "sk-ant-oat01-env") {
+		t.Fatalf("token override code=%d out=\n%s", code, out)
+	}
+}
