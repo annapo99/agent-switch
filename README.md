@@ -122,9 +122,19 @@ Switching to it stores the token as the Claude Keychain login, so every
 `claude` command uses it without `CLAUDE_CODE_OAUTH_TOKEN`. Saving the same
 label again replaces the token. A token only has the inference scope: it
 cannot be refreshed and does not load claude.ai connectors. The usage endpoint
-does not serve tokens, so `ags` reads a token profile's 5h and 7d usage from
-the rate limit headers of a one-token Haiku request, at most every five
-minutes; that request counts toward the account's usage.
+does not serve tokens, and `ags` sends no request for a token profile. To
+show its 5h and 7d usage, pass Claude Code's
+[status line](https://code.claude.com/docs/en/statusline) input to
+`ags record-usage`, which records the rate limits into the profile of the
+token that is active at that moment:
+
+```bash
+input=$(cat)
+printf '%s' "$input" | ags record-usage >/dev/null 2>&1 &
+```
+
+A session that has not sent a request since a switch still reports the
+previous account's numbers until its next reply.
 
 ### Claude background sessions
 

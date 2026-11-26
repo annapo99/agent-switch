@@ -452,63 +452,43 @@ func tokenRows(metadata map[model.MetadataKey]model.Metadata) []any {
 	return rows
 }
 
-func TestClaudeOAuthProviderReadsTokenProfileUsageFromRateLimitHeaders(t *testing.T) {
+func TestClaudeOAuthProviderSendsNothingForATokenProfile(t *testing.T) {
 	useSeoulTime(t)
 	home := t.TempDir()
 	writeTokenUsageProfile(t, home)
-	probed := 0
 	provider := ClaudeOAuthProvider{
 		NowEpoch: 1783486262,
 		Fetcher: func(string) (map[string]any, error) {
-			t.Fatal("usage endpoint called for a token profile")
+			t.Fatal("a request was sent for a token profile")
 			return nil, nil
 		},
-		Prober: func(token string) (map[string]any, error) {
-			probed++
-			if token != "bot-token" {
-				t.Fatalf("token = %q", token)
-			}
-			return usagePayload(45), nil
-		},
+	}
+	if rows := tokenRows(provider.Load(home)); len(rows) != 0 {
+		t.Fatalf("rows without recorded usage = %#v", rows)
 	}
 
+	if err := SaveClaudeUsage(filepath.Join(home, ".agent-switch/profiles/claude/2"), usagePayload(45), 1783486262-120); err != nil {
+		t.Fatal(err)
+	}
 	rows := tokenRows(provider.Load(home))
-	rows = append(rows, tokenRows(ClaudeOAuthProvider{NowEpoch: 1783486262 + 120, Prober: provider.Prober}.Load(home))...)
 
-	if probed != 1 || len(rows) != 4 || rows[0].(map[string]any)["used_percentage"] != float64(45) || rows[3].(map[string]any)["age"] != "2m ago" {
-		t.Fatalf("probed=%d rows=%#v", probed, rows)
-	}
-}
-
-func TestClaudeOAuthProviderProbesTokenProfileAgainAfterFiveMinutes(t *testing.T) {
-	useSeoulTime(t)
-	home := t.TempDir()
-	writeTokenUsageProfile(t, home)
-	ClaudeOAuthProvider{NowEpoch: 1783486262, Prober: func(string) (map[string]any, error) { return usagePayload(45), nil }}.Load(home)
-
-	rows := tokenRows(ClaudeOAuthProvider{NowEpoch: 1783486262 + 301, Prober: func(string) (map[string]any, error) { return usagePayload(50), nil }}.Load(home))
-
-	if len(rows) != 2 || rows[0].(map[string]any)["used_percentage"] != float64(50) {
+	if len(rows) != 2 || rows[0].(map[string]any)["used_percentage"] != float64(45) || rows[1].(map[string]any)["age"] != "2m ago" {
 		t.Fatalf("rows = %#v", rows)
 	}
 }
 
-func TestUsagePayloadFromRateLimitHeaders(t *testing.T) {
-	header := http.Header{}
-	header.Set("anthropic-ratelimit-unified-5h-utilization", "0.45")
-	header.Set("anthropic-ratelimit-unified-5h-reset", "1783490862")
-	header.Set("anthropic-ratelimit-unified-7d-utilization", "0.48")
-	header.Set("anthropic-ratelimit-unified-7d-reset", "1783879140")
+func TestClaudeUsageFromStatusLine(t *testing.T) {
+	payload := ClaudeUsageFromStatusLine([]byte(`{"model":{"id":"x"},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1783490862},"seven_day":{"used_percentage":0},"spend_limit":{"used_percentage":9}}}`))
 
-	payload := usagePayloadFromRateLimitHeaders(header)
-
-	fiveHour := payload["five_hour"].(map[string]any)
-	sevenDay := payload["seven_day"].(map[string]any)
-	if fiveHour["utilization"] != float64(45) || fiveHour["resets_at"] != "2026-07-08T06:07:42Z" || sevenDay["utilization"] != float64(48) {
+	fiveHour, _ := payload["five_hour"].(map[string]any)
+	sevenDay, _ := payload["seven_day"].(map[string]any)
+	if len(payload) != 2 || fiveHour["utilization"] != 23.5 || fiveHour["resets_at"] != "2026-07-08T06:07:42Z" || sevenDay["utilization"] != float64(0) || sevenDay["resets_at"] != nil {
 		t.Fatalf("payload = %#v", payload)
 	}
-	if empty := usagePayloadFromRateLimitHeaders(http.Header{}); len(empty) != 0 {
-		t.Fatalf("payload without headers = %#v", empty)
+	for _, input := range []string{`{"model":{"id":"x"}}`, `{"rate_limits":{"five_hour":{"resets_at":1}}}`, `not json`, ``} {
+		if payload := ClaudeUsageFromStatusLine([]byte(input)); payload != nil {
+			t.Fatalf("ClaudeUsageFromStatusLine(%q) = %#v", input, payload)
+		}
 	}
 }
 

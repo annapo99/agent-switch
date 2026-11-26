@@ -1135,3 +1135,42 @@ func TestOldProfileWithMCPLoginsTakesTheCurrentOnes(t *testing.T) {
 		t.Fatalf("list code=%d out=\n%s", code, out)
 	}
 }
+
+func TestRecordUsageSavesStatusLineUsageForTheActiveToken(t *testing.T) {
+	home := t.TempDir()
+	service, _, _ := saveBrowserLoginAndTokenProfile(t, home)
+	statusLine := `{"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1783490862},"seven_day":{"used_percentage":41}}}`
+	usagePath := func(number string) string {
+		return filepath.Join(home, ".agent-switch/profiles/claude", number, "usage.json")
+	}
+
+	if code, out := runWith(service, []string{"record-usage"}, statusLine); code != 0 || out != "" {
+		t.Fatalf("record on browser login code=%d out=\n%s", code, out)
+	}
+	for _, number := range []string{"1", "2"} {
+		if _, err := os.Stat(usagePath(number)); err == nil {
+			t.Fatalf("browser login usage was recorded into profile %s", number)
+		}
+	}
+
+	if code, out := runWith(service, []string{"use", "2"}, ""); code != 0 {
+		t.Fatalf("use token code=%d out=\n%s", code, out)
+	}
+	if code, out := runWith(service, []string{"record-usage"}, `{"model":{"id":"x"}}`); code != 0 || out != "" {
+		t.Fatalf("record without rate limits code=%d out=\n%s", code, out)
+	}
+	if _, err := os.Stat(usagePath("2")); err == nil {
+		t.Fatal("usage was recorded without rate limits")
+	}
+	if code, out := runWith(service, []string{"record-usage"}, statusLine); code != 0 || out != "" {
+		t.Fatalf("record on token code=%d out=\n%s", code, out)
+	}
+	recorded := readJSONFromPath(usagePath("2"))
+	fiveHour, _ := recorded["usage"].(map[string]any)["five_hour"].(map[string]any)
+	if fiveHour["utilization"] != 23.5 || recorded["fetched_at"] == nil {
+		t.Fatalf("recorded = %#v", recorded)
+	}
+	if _, err := os.Stat(usagePath("1")); err == nil {
+		t.Fatal("token usage was recorded into the browser profile")
+	}
+}

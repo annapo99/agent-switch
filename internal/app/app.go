@@ -171,6 +171,8 @@ func (s *Service) Run(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		return s.Rename(number, strings.TrimSpace(rest[0]), stdout, stdin, opts.agent, opts.yes)
 	case "update":
 		return runUpdater(s.home, s.version, stdout, stderr)
+	case "record-usage":
+		return s.RecordUsage(stdin, stderr)
 	default:
 		fmt.Fprintf(stderr, "Unknown command: %s\n", command)
 		return 2
@@ -590,6 +592,36 @@ func (s *Service) detectedAccounts(agent string) []detectedAccount {
 	return detected
 }
 
+const statusLineInputLimit = 1 << 20
+
+func (s *Service) RecordUsage(stdin io.Reader, stderr io.Writer) int {
+	input, err := io.ReadAll(io.LimitReader(stdin, statusLineInputLimit))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	payload := usage.ClaudeUsageFromStatusLine(input)
+	if payload == nil {
+		return 0
+	}
+	for _, item := range s.detectedAccounts("claude") {
+		tokenID := item.account.Metadata.String(model.MetadataTokenID)
+		if tokenID == "" {
+			continue
+		}
+		for _, profile := range s.store.ListProfiles("claude") {
+			if profile.Metadata.String(model.MetadataTokenID) != tokenID {
+				continue
+			}
+			if err := usage.SaveClaudeUsage(s.store.ProfileDir("claude", profile.Number), payload, time.Now().Unix()); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
+	}
+	return 0
+}
+
 func (s *Service) syncActiveProfiles(agent string) {
 	for _, item := range s.detectedAccounts(agent) {
 		duplicate, ok := s.store.FindDuplicate(item.account)
@@ -882,6 +914,7 @@ func printHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "    remove              remove a saved account number")
 	fmt.Fprintln(stdout, "    rename N NAME       show a saved account as NAME")
 	fmt.Fprintln(stdout, "    update              update ags to the latest release")
+	fmt.Fprintln(stdout, "    record-usage        record a Claude token's usage from status line input on stdin")
 }
 
 type flusher interface {

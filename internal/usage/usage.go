@@ -1,12 +1,10 @@
 package usage
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -29,12 +27,6 @@ const ClaudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 const claudeKeychainService = identity.ClaudeKeychainService
 const oauthExpiryBufferSeconds = 5 * 60
 const claudeUsageCacheFile = "usage.json"
-const ClaudeMessagesURL = "https://api.anthropic.com/v1/messages"
-const claudeProbeModel = "claude-haiku-5-5"
-
-// claudeProbeIntervalSeconds limits how often a token profile spends a
-// one-token request on reading its usage.
-const claudeProbeIntervalSeconds = 5 * 60
 
 var errInvalidGrant = errors.New("invalid_grant")
 
@@ -162,10 +154,7 @@ func TokenStatusByEmailFromCswapText(text string) map[model.MetadataKey]model.Me
 }
 
 type ClaudeOAuthProvider struct {
-	Fetcher func(accessToken string) (map[string]any, error)
-	// Prober reads usage for tokens from `claude setup-token`, which the usage
-	// endpoint does not serve, from the rate limit headers of a model request.
-	Prober                func(accessToken string) (map[string]any, error)
+	Fetcher               func(accessToken string) (map[string]any, error)
 	TokenRefresher        func(credentials string) (string, error)
 	ActiveCredentials     func(home string) (string, bool)
 	RestrictToCurrentHome bool
@@ -278,19 +267,10 @@ func (p ClaudeOAuthProvider) usageRows(home, profileDir string, manifest map[str
 		now = time.Now().Unix()
 	}
 	oauth := claudeOAuthData(credentials)
-	if token := stringValue(oauth["accessToken"]); token != "" {
-		read := p.fetch
-		if inferenceOnly(oauth) {
-			read = p.probe
-			if _, fetchedAt := lastClaudeUsage(home, profileDir, ""); now-fetchedAt < claudeProbeIntervalSeconds {
-				read = nil
-			}
-		}
-		if read != nil {
-			if payload, err := read(token); err == nil {
-				_ = writeJSONFile(filepath.Join(profileDir, claudeUsageCacheFile), map[string]any{"fetched_at": now, "usage": payload})
-				return UsageRowsFromClaudePayload(payload, p.NowEpoch)
-			}
+	if token := stringValue(oauth["accessToken"]); token != "" && !inferenceOnly(oauth) {
+		if payload, err := p.fetch(token); err == nil {
+			_ = SaveClaudeUsage(profileDir, payload, now)
+			return UsageRowsFromClaudePayload(payload, p.NowEpoch)
 		}
 	}
 	payload, fetchedAt := lastClaudeUsage(home, profileDir, manifestMetadata(manifest).String(model.MetadataAccountUUID))
@@ -319,53 +299,34 @@ func inferenceOnly(oauth map[string]any) bool {
 	return true
 }
 
-func (p ClaudeOAuthProvider) probe(accessToken string) (map[string]any, error) {
-	if p.Prober != nil {
-		return p.Prober(accessToken)
-	}
-	body, _ := json.Marshal(map[string]any{
-		"model":      claudeProbeModel,
-		"max_tokens": 1,
-		"system":     "You are Claude Code, Anthropic's official CLI for Claude.",
-		"messages":   []map[string]any{{"role": "user", "content": "hi"}},
-	})
-	request, err := http.NewRequest(http.MethodPost, ClaudeMessagesURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.Header.Set("anthropic-beta", ClaudeOAuthBetaHeader)
-	request.Header.Set("anthropic-version", "2023-06-01")
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("User-Agent", "agent-switch")
-	client := http.Client{Timeout: 15 * time.Second}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, response.Body)
-	payload := usagePayloadFromRateLimitHeaders(response.Header)
-	if len(payload) == 0 {
-		return nil, errHTTPStatus(response.StatusCode)
-	}
-	return payload, nil
+func SaveClaudeUsage(profileDir string, payload map[string]any, now int64) error {
+	return writeJSONFile(filepath.Join(profileDir, claudeUsageCacheFile), map[string]any{"fetched_at": now, "usage": payload})
 }
 
-// usagePayloadFromRateLimitHeaders turns the unified rate limit headers of a
-// model response into the usage endpoint's five_hour/seven_day shape.
-func usagePayloadFromRateLimitHeaders(header http.Header) map[string]any {
+func ClaudeUsageFromStatusLine(input []byte) map[string]any {
+	var status struct {
+		RateLimits map[string]struct {
+			UsedPercentage *float64 `json:"used_percentage"`
+			ResetsAt       *int64   `json:"resets_at"`
+		} `json:"rate_limits"`
+	}
+	if json.Unmarshal(input, &status) != nil {
+		return nil
+	}
 	payload := map[string]any{}
-	for _, window := range []struct{ prefix, key string }{{"5h", "five_hour"}, {"7d", "seven_day"}} {
-		utilization, err := strconv.ParseFloat(header.Get("anthropic-ratelimit-unified-"+window.prefix+"-utilization"), 64)
-		if err != nil {
+	for _, key := range []string{"five_hour", "seven_day"} {
+		window, ok := status.RateLimits[key]
+		if !ok || window.UsedPercentage == nil {
 			continue
 		}
-		entry := map[string]any{"utilization": math.Round(utilization*1000) / 10}
-		if reset, err := strconv.ParseInt(header.Get("anthropic-ratelimit-unified-"+window.prefix+"-reset"), 10, 64); err == nil {
-			entry["resets_at"] = time.Unix(reset, 0).UTC().Format(time.RFC3339)
+		entry := map[string]any{"utilization": *window.UsedPercentage}
+		if window.ResetsAt != nil {
+			entry["resets_at"] = time.Unix(*window.ResetsAt, 0).UTC().Format(time.RFC3339)
 		}
-		payload[window.key] = entry
+		payload[key] = entry
+	}
+	if len(payload) == 0 {
+		return nil
 	}
 	return payload
 }
